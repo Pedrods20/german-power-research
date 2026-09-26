@@ -2,18 +2,12 @@
 title: Storage value
 ---
 
-# The shape is the asset. The forecast is a margin on top of it.
+# Battery dispatch: margins and forecast value
 
-A DE-LU day-ahead arbitrage study. A forecast-guided battery is dispatched
-against realised prices beside three fixed simple strategies, and the advantage
-is then stressed with costs, downtime, a weakened signal and a second daily
-cycle. The result that matters commercially is the split: most of the margin
-comes from the daily price shape, which repeats and needs no model, and the
-forecast adds a minority of it.
-
-This is an hourly day-ahead benchmark. It is a **lower bound** on what a German
-battery earns, not a complete asset valuation: intraday and balancing revenue,
-CAPEX and financing are outside it.
+A 1 MW battery is scheduled each day from a forecast made at the 12:00 D-1 gate
+and settled against realised DE-LU day-ahead prices. The same battery is also run
+on three simple rules that need no model. The difference between them is what
+the forecast is worth.
 
 ```js
 const summary = [...await FileAttachment("data/battery_summary.parquet").parquet()];
@@ -80,58 +74,27 @@ const sample = dispatchExample.filter((d) => asset(d) && d.strategy === "ridge")
 const sampleDate = d3.max(sample, (d) => String(d.local_date));
 ```
 
-## Decision in brief
+## Result
 
-For the selected ${duration}h battery, Ridge adds **EUR
-${euro(headline.incremental_vs_best_naive_eur_mw / sampleYears)}/MW per year** —
-EUR ${euro(headline.mean_daily_incremental_eur_mw)}/MW on an average day — over
-**${name(headline.best_naive)}**, the strongest fixed naive *in this observed
-sample*. That is a ${pct(headline.incremental_vs_best_naive_eur_mw / baselineValue)}
-uplift over that comparator, and it is not the percentage reduction in price
-forecast error.
+For the ${duration}-hour battery, Ridge earns **EUR
+${euro(headline.incremental_vs_best_naive_eur_mw / sampleYears)}/MW a year** more
+than the best simple rule, **${name(headline.best_naive)}**: EUR
+${euro(headline.mean_daily_incremental_eur_mw)}/MW on an average day, or
+${pct(headline.incremental_vs_best_naive_eur_mw / baselineValue)} more margin. The
+paired 95% interval is EUR ${euro(headline.ci_low_eur_mw / sampleYears)}–${euro(headline.ci_high_eur_mw / sampleYears)}/MW
+a year. The sample covers **${batteryDays} days**, ${headline.sample_start} to
+${headline.sample_end}; the annual figures are averages over it, not
+projections.
 
-Read the rate, not the total. The same result stated as a cumulative is EUR
-${euro(headline.incremental_vs_best_naive_eur_mw)}/MW, which sounds like a
-different order of magnitude and is not: it spans **${batteryDays} common
-eligible days**, from ${headline.sample_start} to ${headline.sample_end}, about
-${sampleYears.toFixed(1)} years. These are sample-period margins, **not
-annualized returns** and not a projection.
-The base case excludes variable operating and degradation costs; the nonzero
-cases below rerun the optimizer. CAPEX, fixed OPEX, taxes, financing and other
-market revenues are outside this study.
+Most of the margin does not need a forecast. Repeating the daily shape earns the
+bulk of it, and the forecast adds a thin layer on days when the shape changes.
+The best simple rule is ranked over the whole sample, in hindsight; all three are
+shown.
 
-The exploratory paired 95% interval for that incremental margin is
-EUR ${euro(headline.ci_low_eur_mw)}–${euro(headline.ci_high_eur_mw)}/MW.
-It is conditional on already-inspected history, not proof of future performance.
-
-**What is being valued.** A deliberately simple asset: 1 MW of power at
-${duration} MWh of energy, 90% round-trip efficiency in the base case, at most
-one charge-then-discharge episode per day, starting and ending every day empty,
-with no rolling intraday re-optimization. That one-episode rule binds on almost
-every day in the sample, and it is a choice rather than a physical limit — a
-German battery facing a midday solar trough between two demand peaks runs two.
-The [two-episode stress](#costs-and-robustness) below reports what that
-conservatism costs. The schedule for a whole delivery day
-is chosen from the forecast at the day-ahead gate and then settled against the
-prices that actually cleared. The simplicity is the point: every euro of
-difference between strategies comes from the price signal each one acted on,
-not from a more sophisticated optimizer, because all of them share the same
-physics, the same days and the same settlement.
-
-**Why the comparison is against naive strategies.** The commercially relevant
-question is never "does the model have skill in the abstract" but "is it worth
-more than what the desk would have done anyway". Repeating the previous day,
-the previous week or the last similar day requires no model, no data pipeline
-and no maintenance. The incremental margin reported here is therefore the value
-of the forecast *over that free alternative* — not the battery's total revenue,
-which a naive strategy also earns most of.
-
-## Compare the alternatives
-
-All five forecast strategies use the same eligible days and physical constraints.
-The best naive is chosen once per asset/scenario over the whole sample, never
-hour by hour or day by day. That retrospective ranking is a diagnostic, not a
-deployable model-selection rule. All three fixed comparisons remain visible.
+These are **simulated day-ahead arbitrage margins under the stated
+assumptions**, not a revenue estimate for a real battery. They exclude operating,
+degradation and capital costs, which lower returns, and intraday and balancing
+revenue, which a real battery would add.
 
 ```js
 renderTable("battery-scoreboard", summary.filter(asset).map((d) => ({
@@ -143,17 +106,9 @@ renderTable("battery-scoreboard", summary.filter(asset).map((d) => ({
 ```
 
 ```js
-renderTable("battery-comparisons", selectedPairs.map((d) => ({
-  Model: name(d.strategy), Comparator: name(d.baseline),
-  "Increment (EUR/MW)": d.incremental_eur_mw,
-  "95% low": d.ci_low_eur_mw, "95% high": d.ci_high_eur_mw,
-})), {"Increment (EUR/MW)": euro, "95% low": euro, "95% high": euro})
-```
-
-```js
 const cumulativeChart = Plot.plot({
-  title: "Cumulative operating margin — zero-cost base",
-  subtitle: `${duration}h battery; partial months contain only eligible days.`,
+  title: "Every strategy earns most of the margin; the gaps open slowly",
+  subtitle: `Cumulative operating margin, ${duration}h battery, zero-cost base case. Partial months contain only eligible days.`,
   width, height: 320, marginLeft: 70,
   x: {type: "utc", label: null}, y: {label: "EUR per MW", grid: true},
   color: {domain: [...labels.values()], legend: true},
@@ -166,12 +121,98 @@ cumulativeChart.id = "battery-cumulative";
 display(cumulativeChart);
 ```
 
+```js
+renderTable("battery-comparisons", selectedPairs.map((d) => ({
+  Model: name(d.strategy), Comparator: name(d.baseline),
+  "Increment (EUR/MW)": d.incremental_eur_mw,
+  "95% low": d.ci_low_eur_mw, "95% high": d.ci_high_eur_mw,
+})), {"Increment (EUR/MW)": euro, "95% low": euro, "95% high": euro})
+```
+
+Increments in this table are totals over the whole sample, not annual figures.
+
+## The forecast's share is shrinking
+
+```js
+const byYear = d3.groups(monthlyMargins.filter(asset), (d) => String(d.month).slice(0, 4)).map(([year, rows]) => {
+  const perDay = (strategy) => {
+    const picked = rows.filter((d) => d.strategy === strategy);
+    return d3.sum(picked, (d) => d.profit_eur / d.power_mw) / d3.sum(picked, (d) => d.days);
+  };
+  const ridgeDay = perDay("ridge"), naiveDay = perDay(headline.best_naive), perfectDay = perDay("perfect_foresight");
+  return {year, days: d3.sum(rows.filter((d) => d.strategy === "ridge"), (d) => d.days), ridgeDay, naiveDay, uplift: ridgeDay / naiveDay - 1, naiveCapture: naiveDay / perfectDay};
+}).sort((a, b) => a.year.localeCompare(b.year));
+const firstYear = byYear[0];
+const lastYear = byYear[byYear.length - 1];
+const year2023 = byYear.find((d) => d.year === "2023");
+```
+
+```js
+renderTable("battery-by-year", byYear.map((d) => ({
+  Year: d.year === lastYear.year ? `${d.year} (partial)` : d.year,
+  Days: d.days,
+  "Ridge (EUR/MW/d)": d.ridgeDay,
+  [`${name(headline.best_naive)} (EUR/MW/d)`]: d.naiveDay,
+  "Increment (EUR/MW/d)": d.ridgeDay - d.naiveDay,
+  "Uplift": d.uplift,
+  [`${name(headline.best_naive)} vs perfect`]: d.naiveCapture,
+})), {"Ridge (EUR/MW/d)": euro, [`${name(headline.best_naive)} (EUR/MW/d)`]: euro, "Increment (EUR/MW/d)": (v) => v.toFixed(1), "Uplift": pct, [`${name(headline.best_naive)} vs perfect`]: pct})
+```
+
+The simple rule's share of the perfect-foresight margin rose from
+**${pct(firstYear.naiveCapture)}** in ${firstYear.year} to
+**${pct(lastYear.naiveCapture)}** in ${lastYear.year}. Ridge's increment in euros
+has been broadly stable since 2023, but relative to the simple rule it fell from
+${pct(year2023.uplift)} to ${pct(lastYear.uplift)}. The more regular the
+solar-driven shape, the more a rule that repeats it captures on its own.
+
+## How a forecast becomes a decision
+
+```js
+const dayProfit = (strategy) => d3.sum(dispatchExample.filter((d) => asset(d) && d.strategy === strategy && String(d.local_date) === sampleDate), (d) => d.profit_eur);
+```
+
+On ${sampleDate}, the latest day in the sample, the whole day's schedule is set
+from Ridge's forecast at the gate and then settled at the prices that cleared.
+Ridge earned **EUR ${euro(dayProfit("ridge"))}**, the ${name(headline.best_naive)}
+rule EUR ${euro(dayProfit(headline.best_naive))}, and perfect foresight EUR
+${euro(dayProfit("perfect_foresight"))}.
+${dayProfit("ridge") < dayProfit(headline.best_naive) ? "It is one of the days on which the forecast cost money against the simple rule." : "On this day the forecast earned more than the simple rule."}
+
+```js
+Plot.plot({
+  title: `${duration}h battery on ${sampleDate}: Ridge forecast against realised price`,
+  width, height: 200, marginLeft: 65,
+  x: {label: null, axis: null}, y: {label: "EUR/MWh", grid: true},
+  color: {domain: ["Realised price", "Ridge forecast"], range: ["#333333", "#0072B2"], legend: true},
+  marks: [
+    Plot.lineY(sample, {x: "local_hour", y: "actual", stroke: () => "Realised price", tip: true}),
+    Plot.lineY(sample, {x: "local_hour", y: "forecast", stroke: () => "Ridge forecast", strokeDasharray: "4,3", tip: true}),
+    Plot.ruleY([0]),
+  ],
+})
+```
+
+```js
+Plot.plot({
+  title: "The schedule it produced",
+  subtitle: "Negative bars charge the battery, positive bars discharge it; the line is the state of charge.",
+  width, height: 200, marginLeft: 65,
+  x: {label: "Market-local hour"}, y: {label: "MWh", grid: true},
+  color: {domain: ["State of charge", "Action"], range: ["#0072B2", "#D55E00"], legend: true},
+  marks: [
+    Plot.lineY(sample, {x: "local_hour", y: "soc_mwh", stroke: () => "State of charge", tip: true}),
+    Plot.barY(sample, {x: "local_hour", y: "action_mwh", fill: () => "Action", fillOpacity: .55, tip: true}),
+    Plot.ruleY([0]),
+  ],
+})
+```
+
 ## Costs and robustness
 
-Costs apply to **absolute grid-side charging plus discharging MWh**, not to
-capacity or battery-side cycles. The 2/3 and 5/10 cost pairs are illustrative
-variable/degradation charges, **not calibrated German project estimates**.
-Margin after those charges is still not net investment profit.
+The stresses below rerun the optimiser for Ridge without retuning it. Costs apply
+to grid-side charging plus discharging MWh; the rates are illustrative, not
+calibrated German project costs.
 
 ```js
 renderTable("battery-costs", costs.filter((d) => asset(d) && fitted(d)).map((d) => ({
@@ -185,13 +226,6 @@ renderTable("battery-costs", costs.filter((d) => asset(d) && fitted(d)).map((d) 
 })), {"Gross margin (EUR)": euro, "Stated costs (EUR)": euro, "After-cost margin (EUR)": euro, "Increment (EUR/MW)": euro})
 ```
 
-The following fixed stresses focus on Ridge, the featured forecast. They do not
-retune it. Equivalent results for all strategies are available in the downloadable data.
-
-```js
-html`<a href=${await FileAttachment("data/battery_sensitivities.parquet").url()} download="battery_sensitivities.parquet">Download all sensitivity results (Parquet)</a>`
-```
-
 ```js
 renderTable("battery-sensitivities", stresses.filter((d) => asset(d) && d.strategy === "ridge").sort((a, b) => [...scenarioNames.keys()].indexOf(a.scenario) - [...scenarioNames.keys()].indexOf(b.scenario)).map((d) => ({
   Scenario: scenarioNames.get(d.scenario),
@@ -203,46 +237,36 @@ renderTable("battery-sensitivities", stresses.filter((d) => asset(d) && d.strate
 })), {"Margin (EUR/MW)": euro, "Increment (EUR/MW)": euro, "95% low": euro, "95% high": euro})
 ```
 
-The **85% efficiency** case uses a technical reference from
-[NREL ATB 2024](https://atb.nrel.gov/electricity/2024/utility-scale_battery_storage),
-not a claim about this hypothetical asset. The **50% signal** case halves each
-fitted forecast's deviation from the previous-day forecast, without using
-realised prices. It need not worsen MAE or profit: this is a signal-dependence
-diagnostic, not a calibrated forecast-error distribution.
+```js
+html`<a href=${await FileAttachment("data/battery_sensitivities.parquet").url()} download="battery_sensitivities.parquet">Download all sensitivity results (Parquet)</a>`
+```
 
-ATB accounts for augmentation within fixed O&M rather than the per-throughput
-charges used here. Its cost framework therefore does **not** validate our
-illustrative EUR/MWh rates; do not combine both approaches without checking for
-double-counted degradation costs.
-
-**Downtime** is one complete unavailable day every twenty calendar days, anchored
-at 1 January 2025 and shared by all strategies. Activity and settlement are zero
-on those days; observations and the common sample denominator remain intact.
-It assumes the outage is known before scheduling, not a mid-cycle failure or an
-imbalance penalty. The combined case applies 2/3 costs, 85% efficiency, 50% signal
-and the same downtime calendar.
-
-**Two episodes a day** relaxes the asset rather than the forecast: the same
-frozen predictions, days and settlement, dispatched by a battery allowed a
-second charge-then-discharge cycle. It is the pattern the German day now invites
-— charge overnight, sell the morning ramp, recharge in the midday solar trough,
-sell the evening peak — and the published one-episode benchmark forbids it.
-
-The result splits in two directions, and the split is the point. Gross margin
-rises **${pct(twoEpisodes.profit_eur / headline.profit_eur - 1)}**, to EUR
-${euro(twoEpisodes.profit_eur_mw / sampleYears)}/MW per year, at
+**A second daily cycle adds margin, not forecast value.** Allowing two
+charge–discharge episodes a day raises gross margin by
+**${pct(twoEpisodes.profit_eur / headline.profit_eur - 1)}**, at
 ${(twoEpisodes.equivalent_cycles / twoEpisodes.days).toFixed(2)} equivalent
-cycles a day — the optimizer takes the second episode only when it pays, which
-is not every day. But Ridge's advantage over the best naive *falls*, from EUR
+cycles a day, while Ridge's advantage over the best simple rule moves from EUR
 ${euro(headline.incremental_vs_best_naive_eur_mw / sampleYears)} to EUR
-${euro(twoEpisodes.incremental_vs_best_naive_eur_mw / sampleYears)}/MW per year.
+${euro(twoEpisodes.incremental_vs_best_naive_eur_mw / sampleYears)}/MW a year:
+the simple rule earns almost all of the extra margin too. The second cycle
+trades the midday solar trough, the most predictable feature of the German day.
 
-The second episode is the midday trough, and the trough is the most predictable
-feature of the German day: it arrives with the sun, at roughly the same hours,
-every clear day. A naive strategy captures it almost as well as a fitted model
-does. Widening the asset therefore adds margin that requires no forecast, which
-is the same conclusion this page reaches from the other direction — the shape is
-the asset, and the forecast earns its keep on the days the shape is atypical.
+<details>
+<summary>Scenario definitions</summary>
+
+- **85% efficiency** follows the [NREL ATB 2024](https://atb.nrel.gov/electricity/2024/utility-scale_battery_storage)
+  technical reference. ATB treats augmentation within fixed O&M rather than
+  per-MWh charges, so it does not validate the illustrative cost rates; do not
+  combine both approaches without checking for double counting.
+- **50% signal** halves each fitted forecast's deviation from the previous-day
+  forecast, without using realised prices. It tests how much the result depends
+  on the forecast signal; it is not a calibrated error distribution.
+- **Downtime** removes one whole day in every twenty, anchored at 1 January 2025
+  and shared by all strategies. The outage is assumed known before scheduling.
+- **Combined** applies the 2/3 EUR costs, 85% efficiency, 50% signal and the
+  downtime calendar together.
+
+</details>
 
 ## Downside and concentration
 
@@ -255,18 +279,23 @@ renderTable("battery-risk", selectedRisk.map((d) => ({
 })), {"Worst day (EUR)": euro, "Max drawdown (EUR)": euro, "Top 5 days / positive margin": pct})
 ```
 
-Against its sample-best naive, Ridge underperforms on **${headline.underperform_days}
-of ${batteryDays} days**. Its five largest positive incremental days account for
-**${pct(headline.top_5_days_share_positive_incremental)}** of all positive incremental
-margin. Removing those five gains leaves **EUR
-${euro(headline.incremental_without_best_5_days_eur_mw)}/MW** incremental margin.
-This removal is an ex-post concentration test, not a trading rule.
+Ridge underperforms the best simple rule on **${headline.underperform_days} of
+${batteryDays} days**. Its five best days account for
+${pct(headline.top_5_days_share_positive_incremental)} of all positive
+incremental margin, and removing them still leaves EUR
+${euro(headline.incremental_without_best_5_days_eur_mw)}/MW, so the advantage is
+not driven by a handful of days.
 
-Intervals use 2,000 paired, non-overlapping seven-calendar-day block resamples
-(seed 20260914). Missing dates are not compressed. These intervals do not account
-for model selection, multiple comparisons, structural change or omitted costs.
+<details>
+<summary>How the intervals are built</summary>
 
-## What can we conclude about duration?
+Intervals use 2,000 paired resamples of non-overlapping seven-day blocks (seed
+20260914); missing dates are not compressed. They do not account for model
+selection, multiple comparisons, structural change or omitted costs.
+
+</details>
+
+## Duration
 
 ```js
 renderTable("battery-durations", stresses.filter((d) => d.strategy === "ridge" && d.scenario === "base").sort((a, b) => a.energy_mwh - b.energy_mwh).map((d) => ({
@@ -278,12 +307,10 @@ renderTable("battery-durations", stresses.filter((d) => d.strategy === "ridge" &
 })), {"Margin (EUR/MW)": euro, "Increment (EUR/MW)": euro, "Increment / MWh capacity": euro})
 ```
 
-Longer duration can capture more absolute arbitrage margin but requires more
-energy capacity. Compare the incremental value per MW **and per MWh of capacity**;
-do not choose an investment simply because its gross margin is larger.
-Treat 4h as a candidate for a follow-up asset business case, not the proven
-optimal duration. Project CAPEX, fixed OPEX, availability terms, lifetime
-degradation and additional revenues are required before ranking investments.
+Longer duration earns more per MW but needs more energy capacity, so compare the
+increment per MWh as well. Ranking durations as investments would need capital
+costs, availability terms, lifetime degradation and other revenues, which are
+outside this study.
 
 ## Is this margin durable as the market changes?
 
@@ -307,139 +334,52 @@ const windOffshoreTarget = extrapolationFlags.find((d) => d.technology === "Wind
 const foresightCompetition = competitionCorrelation.find((d) => d.strategy === "perfect_foresight" && d.energy_mwh === duration);
 ```
 
-Solar's own capture rate — what a solar generator actually earns, divided by
-the flat average price — fell from **${pct(firstSolar.capture_rate)}** in
-${firstSolar.period} to **${pct(lastSolar.capture_rate)}** in ${lastSolar.period}
-(partial year in this release),
-while Germany's installed solar AC capacity grew roughly **${solarCapacityMultiple.toFixed(1)}×**
-(correlation ${solarCaptureCorr.pearson_r.toFixed(2)}, n=${solarCaptureCorr.n}
-complete years, ${solarCaptureCorr.fitted_year_min}-${solarCaptureCorr.fitted_year_max}).
-The on/off-peak spread moved with it, from **EUR ${euro(firstSolarYear.spread)}/MWh**
-in ${firstSolar.period} to **EUR ${euro(lastSolarYear.spread)}/MWh** in
-${lastSolar.period} (correlation ${spreadCorr.pearson_r.toFixed(2)}) — on-peak
-hours are now, on average, *cheaper* than off-peak, the textbook signature of
-solar cannibalisation. Wind shows no comparable trend
-(correlation ${windCaptureCorr.pearson_r.toFixed(2)}): its flatter daily and
-seasonal output differs from solar's midday concentration. This annual
-correlation alone does not measure either technology's causal price impact.
+**Solar is still deepening the trough.** Solar's capture rate fell from
+**${pct(firstSolar.capture_rate)}** in ${firstSolar.period} to
+**${pct(lastSolar.capture_rate)}** in ${lastSolar.period} (partial year) as
+installed solar grew about ${solarCapacityMultiple.toFixed(1)}×, and on-peak
+hours now clear below off-peak on average: the signature of solar
+cannibalisation. Wind shows no comparable trend. With
+${solarCaptureCorr.n} complete years, these correlations
+(${solarCaptureCorr.pearson_r.toFixed(2)} for solar capture,
+${windCaptureCorr.pearson_r.toFixed(2)} for wind) describe co-movement, not
+causation. The 2030 targets, ${gw(solarTarget.planned_2030_gw)} GW of solar
+against a recorded ${gw(solarTarget.realised_max_gw)} GW AC
+(${gw(solarDcTarget.realised_max_gw)} GW DC) in ${solarTarget.realised_max_year},
+lie well beyond the range these data cover.
 
-This is a real, already-visible co-movement, not a fitted causal model: with
-only ${solarCaptureCorr.n} complete annual points, most series that both trend
-over the period will correlate whether or not one drives the other.
+**Competing storage has not yet compressed the margin, but that may change.**
+For the ${duration}-hour battery, the perfect-foresight margin has risen with
+Germany's battery fleet (r=${foresightCompetition.pearson_r.toFixed(2)},
+n=${foresightCompetition.n} years, ${foresightCompetition.fitted_year_min}–${foresightCompetition.fitted_year_max}).
+Over so few years, with the gas shock in the sample, this cannot rule out a
+competition effect; it only shows that one has not yet dominated. Storage
+packs are getting cheaper: global stationary-storage pack prices fell 45% in 2025
+to $70/kWh ([BloombergNEF, December 2025](https://about.bnef.com/insights/clean-transport/lithium-ion-battery-pack-prices-fall-to-108-per-kilowatt-hour-despite-rising-metal-prices-bloombergnef/)),
+which lowers the barrier to new capacity. A calmer gas market or a large build of
+grid-scale storage would shrink the spread itself, not just the forecast's edge.
 
-Government targets describe capacity expansion, not a continuation of the
-estimated price relationship. In the completed calendar years used here,
-Germany's maximum recorded solar capacity was **${gw(solarTarget.realised_max_gw)} GW AC**
-(${solarTarget.realised_max_year}) or **${gw(solarDcTarget.realised_max_gw)} GW DC**
-(${solarDcTarget.realised_max_year}); the provider's EEG 2023 target for 2030 is
-**${gw(solarTarget.planned_2030_gw)} GW**. The target's AC/DC convention has not
-been independently verified, so both historical series are shown.
-Onshore wind's maximum in those completed years is
-**${gw(windOnshoreTarget.realised_max_gw)} GW** against a ${gw(windOnshoreTarget.planned_2030_gw)} GW
-target; offshore wind's is **${gw(windOffshoreTarget.realised_max_gw)} GW**
-against **${gw(windOffshoreTarget.planned_2030_gw)} GW**. Every one of these
-targets is an extrapolation beyond anything this project's own correlation is
-fitted on — a real gap to weigh against the trend above, not a forecast of it.
+<details>
+<summary>Dispatch rules and study boundaries</summary>
 
-Does competition from other batteries already show up as compressed arbitrage
-margin? Not yet, in this sample. For the selected ${duration}h battery,
-perfect-foresight margin correlates **positively** with Germany's own battery
-fleet (r=${foresightCompetition.pearson_r.toFixed(2)}, n=${foresightCompetition.n}
-years, ${foresightCompetition.fitted_year_min}-${foresightCompetition.fitted_year_max};
-the same sign holds for the forecast-driven strategies too) — not negatively.
-The period also includes the 2021-2022 price shock and changes in renewable
-output. These are possible confounders, not effects separated by this analysis.
-**Read this as an absence of evidence, not as evidence of absence.** An annual
-correlation over this few points cannot isolate a competition effect, so what
-the data supports is the narrow statement that compression has not yet reached
-the price — not the broader one that it will not. The trailing partial year is
-excluded using the frozen study's end, not today's date; the included 2020
-sample starts on 3 January and dispatch coverage exclusions still apply.
+- **Dispatch:** one full-day schedule chosen from the forecast at the gate, then
+  settled at realised prices; no intraday re-optimisation. At most one
+  charge–discharge episode a day in the base case, 1 MW power, 90% round-trip
+  efficiency, a 0.25 MWh state-of-charge grid, and an empty battery at the start
+  and end of each day. Perfect foresight uses the same optimiser on realised
+  prices; no trade is the zero alternative.
+- **Sample:** all strategies share ${coverage[0].common_days} complete days out
+  of ${coverage[0].candidate_days} candidates. Incomplete days and ambiguous
+  clock-change days are excluded, not imputed. Forecasts are rounded to cents
+  before dispatch.
+- **Revenue stack:** a German battery can also trade continuous intraday and
+  sell balancing capacity and energy (FCR, aFRR and mFRR, tendered through
+  [regelleistung.net](https://www.regelleistung.net/)). Those markets are not
+  modelled, nor is the trade-off that capacity committed to balancing cannot
+  arbitrage at the same time.
+- **Evidence:** retrospective, on history inspected during development.
+  Historical inputs carry provider revisions. Market impact, imbalance
+  settlement, capital costs and financing are not modelled. See the
+  [forecast protocol](./forecast) and [methodology](./methodology).
 
-That fleet is growing fast, and battery packs became cheaper: global
-stationary-storage pack prices fell 45% in a single year, to $70/kWh in 2025
-([BloombergNEF, 2025 Lithium-Ion Battery Price Survey](https://about.bnef.com/insights/clean-transport/lithium-ion-battery-pack-prices-fall-to-108-per-kilowatt-hour-despite-rising-metal-prices-bloombergnef/),
-published 9 December 2025) — the sharpest drop of any segment BNEF tracks.
-This is a pack price, not installed German project CAPEX. A
-falling barrier to adding competing capacity is exactly the condition under
-which the "not yet" above would be expected to change.
-
-Auction results add one more data point, with a caveat attached. Germany's
-onshore wind auction with a 1 May 2026 bid deadline had a volume-weighted average award
-value of 5.06 ct/kWh — EUR 50.6/MWh
-([Bundesnetzagentur, consolidated onshore wind auction statistics](https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/Ausschreibungen/Wind_Onshore/BeendeteAusschreibungen/start.html)),
-well below DE-LU's realised ${lastWind.period} wind capture price of
-**EUR ${euro(lastWind.capture_price)}/MWh** (partial year). An auction award
-value and a realised, generation-weighted wholesale price are different
-measures. This comparison does not establish a project's hourly revenue,
-cost of energy or profitability; support eligibility and project-specific
-costs are not modelled here.
-
-**What would make the ${duration}h case above less attractive.** Its margin
-depends on price differences persisting after losses and costs. A calmer
-price shape (the gas-crisis premium unwinding) or storage finally growing past
-the point where it visibly compresses spreads rather than just riding them
-would shrink the spread this battery is paid to exploit, not just this
-project's forecast advantage over a naive strategy. None of the correlations
-above can identify a causal competition effect or, at n=${foresightCompetition.n}
-years, say when that turn arrives. Capacity growth and falling pack prices
-motivate a downside scenario; they do not date or quantify future margin erosion.
-
-## Dispatch and study boundaries
-
-A full-day schedule is chosen from the forecast, then settled against observed
-prices. There is one charge-then-discharge episode at most, 1 MW power,
-90% round-trip efficiency in the base case, a 0.25 MWh SOC grid and zero initial
-and terminal SOC each day. There is **no rolling intraday re-optimization**.
-Perfect foresight uses the same optimizer and constraints as an upper bound;
-no trade provides an explicit zero alternative.
-
-```js
-Plot.plot({
-  title: `${duration}h Ridge dispatch — ${sampleDate}`,
-  width, height: 180, marginLeft: 65,
-  x: {label: null, axis: null}, y: {label: "EUR/MWh", grid: true},
-  marks: [Plot.lineY(sample, {x: "local_hour", y: "actual", stroke: "#333333", tip: true}), Plot.ruleY([0])],
-})
-```
-
-```js
-Plot.plot({
-  width, height: 200, marginLeft: 65,
-  x: {label: "Market-local hour"}, y: {label: "MWh", grid: true},
-  color: {domain: ["State of charge", "Action"], range: ["#0072B2", "#D55E00"], legend: true},
-  marks: [
-    Plot.lineY(sample, {x: "local_hour", y: "soc_mwh", stroke: "State of charge", tip: true}),
-    Plot.barY(sample, {x: "local_hour", y: "action_mwh", fill: "Action", fillOpacity: .55, tip: true}),
-    Plot.ruleY([0]),
-  ],
-})
-```
-
-The economic input is the frozen forecast's clock-hour presentation table,
-rounded to two decimals before dispatch. All strategies share ${coverage[0].common_days}
-complete settled days out of ${coverage[0].candidate_days} candidate days. Incomplete
-days and ambiguous clock-only DST days are excluded, not imputed or silently
-treated as physical quarter-hour trades. Full-precision forecast scores and
-rounded-input battery economics serve different, explicitly recorded purposes.
-
-**Why this is a lower bound, and by how much is not measured here.** A German
-battery does not earn only from the day-ahead auction. It can also sell
-continuous intraday, where a shorter lead time and quarter-hourly products reward
-exactly the flexibility this study holds fixed at the noon gate, and it can bid
-balancing capacity and energy — FCR, aFRR and mFRR — tendered by the four German
-TSOs through their joint platform
-([regelleistung.net](https://www.regelleistung.net/)). Those revenue stacks were
-historically the larger part of a German battery's income and are not modelled
-here, nor is their interaction: capacity committed to balancing is capacity that
-cannot simultaneously arbitrage. The number on this page is therefore what the
-day-ahead shape alone is worth to a price-taking asset, which is a floor under a
-real portfolio's revenue rather than an estimate of it. Quantifying the split
-would need balancing-market and intraday data this project does not ingest.
-
-This is **retrospective development evidence**, already inspected. Forecast
-parameters are not reselected by these sensitivities, and no untouched or
-prospective result is claimed. Historical provider revisions are not guaranteed
-to match their original publication-time values. Intraday, ancillary services,
-imbalance settlement, market impact, CAPEX and financing are not modelled.
-See the [forecast protocol](./forecast) and [methodology](./methodology).
+</details>

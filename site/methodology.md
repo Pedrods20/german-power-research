@@ -30,10 +30,13 @@ The [market view](./) turns on a distinction that is easy to lose:
   (08:00–20:00 local, weekdays, for DE-LU). It is what a fixed block contract
   pays, it is defined by the clock, and it goes negative when midday solar pushes
   the on-peak block below the hours surrounding it.
-- The **within-day range** is the day's highest interval price minus its lowest,
+- The **within-day range** is the day's highest hourly price minus its lowest,
   averaged over complete local days. It is what a storage asset is paid, because
   a battery charges at the day's low and discharges at its high wherever in the
-  day those happen to fall.
+  day those happen to fall. Since October 2025 each hour is the average of its
+  four quarter-hour prices: quarter-hour extremes are wider by construction, and
+  measuring them would have widened the 2026 range by about 16% with no change
+  in the market.
 
 A day is complete at 23 observed hours, which is what the spring clock change
 leaves. Partial days are dropped rather than scaled, because a day the provider
@@ -41,15 +44,15 @@ covered until noon has a genuinely smaller range and averaging it in would repor
 a falling spread that is really a reporting gap.
 
 **Seasonality, and what a partial year costs.** The within-day range is
-seasonal: averaged over 2019-2025 it runs about 65-70 EUR/MWh in January and
-February against 113-134 in August and September, because a solar-shaped day has
-a deeper midday trough in summer. A year that ends in September therefore sits
-above its own full-year average. Measured on the complete years in this store,
-January-to-September runs **+4.0% (2022), +3.5% (2023) and +5.2% (2025)** above
-the full year, with 2019, 2020 and 2024 within ±4.5% in the other direction and
+seasonal: averaged over 2019–2025 it runs about 64–70 EUR/MWh in January and
+February against 113–134 in August and September, because a solar-shaped day has
+a deeper midday trough in summer. The fourth quarter is wide too, so a year that
+ends in September is not consistently above its full-year average: January to
+September ran between −4.4% (2020) and +10.6% (2025) of the full year, with
 2021 an outlier at −36% because the gas spike landed in its fourth quarter.
-Discount the current partial year's range figures by roughly that much. Reproduce
-with `gpa.metrics.price.intraday_spread(period="month")` over the committed store.
+Treat the current partial year's range as uncertain by roughly that much.
+Reproduce with `gpa.metrics.price.intraday_spread(period="day")` over the
+committed store.
 
 Both series are published as a percentage of the same year's own average price.
 That normalisation is what separates a price-level shock from a change in daily
@@ -137,38 +140,21 @@ adopting it as a new frozen release is a separate decision this project has
 not made, and the assigned vintage is precisely why it cannot be made from the
 archive alone.
 
-The prospective path resolves that differently, because for the day it is
-forecasting it is not reading an archive: it records the instant it actually
-retrieved the forecast. Rather than one arm that silently changes inputs with
-provider timing, each run issues two frozen identities — `ridge` on the
-information set above, `ridge_da` on that set plus these features — and the
-ledger records both, so they can be scored against each other. `ridge_da`
-abstains, and says so, when the provider has not published the delivery day
-before the gate.
+The prospective path records the instant it actually retrieved the delivery
+day's forecasts. Each run issues two frozen identities, `ridge` on the
+information set above and `ridge_da` on that set plus these features, and
+`ridge_da` abstains on the record when the provider has not published the
+delivery day before the gate. Its training history still carries the assigned
+D-1 vintage, because the archive holds no observed instant; the assumption
+shapes how that arm is fitted, never what its issued forecast knew.
 
-The first run to clear a gate, at 07:49 UTC on 23 September 2026, did exactly
-that: `ridge` issued all 24 hours of the 24th and `ridge_da` abstained on all 24,
-because Energy-Charts had not yet published the delivery day. The timing may be
-structural rather than bad luck. Commission Regulation (EU) 543/2013 requires
-day-ahead wind and solar forecasts by **18:00 Brussels time on D-1**, six hours
-after the day-ahead gate (Article 14(1)(d)); only the load forecast is due before
-it (Article 6(1)(b)). If the public series routinely appears after noon, the
-assigned noon vintage above is optimistic rather than neutral, and the ablation
-measures information a bidder would not have held from this source at the gate.
-That is measured rather than argued: `gpa probe-fundamentals` runs hourly and
-logs how much of the next delivery day the provider serves and how far each
-check sits from the gate.
-
-The limitation that remains is stated rather than hidden. Only the delivery
-day's snapshot carries an observed vintage; `ridge_da`'s training history keeps
-the assigned D-1 gate, because the archive holds no observed instant for it and
-a model cannot be fitted on an empty history. The assumption therefore shapes
-how that arm is fitted, never what its issued forecast was permitted to know —
-which is the claim a reader would challenge. Training on observed vintages
-throughout becomes possible only once this ledger has accumulated enough of
-them. For the same reason the retrieval age is recorded on every issue as
-evidence but is not itself a fitted feature: it is identically zero across any
-training window, so it could only decorate the model, never inform it.
+Publication timing may be the binding constraint. Commission Regulation (EU)
+543/2013 requires day-ahead wind and solar forecasts by **18:00 Brussels time on
+D-1**, six hours after the gate (Article 14(1)(d)); only the load forecast is due
+before it (Article 6(1)(b)). If the public series routinely appears after noon,
+the assigned noon vintage is optimistic and the ablation's gain is an upper
+bound. `gpa probe-fundamentals` runs hourly and logs how much of the next
+delivery day the provider serves at each check.
 
 See the complete result on the [Forecasting page](./forecast).
 
@@ -186,10 +172,9 @@ underlying data's own last observed interval (not the day the site happens
 to be rebuilt), and is reported with its exact fitted range: this is a
 real, small-sample co-movement, not a fitted causal model, and none of it
 identifies whether battery-fleet growth is separately compressing this
-project's own arbitrage margin. Two figures on that page are external
-citations verified against their primary source rather than computed from
-this project's data: a BloombergNEF battery-price survey and a Bundesnetzagentur
-onshore-wind auction result, both dated.
+project's own arbitrage margin. One figure on that page, a BloombergNEF
+battery-price survey, is an external citation verified against its primary
+source rather than computed from this project's data.
 
 ## Battery valuation
 
@@ -258,9 +243,9 @@ reason each one was chosen and what it costs the result.
 | Common sample | All five strategies scored on identical days and hours | Prevents a model from winning by being evaluated on easier cells | Comparisons would not be like-for-like |
 | Missing data | Left missing; incomplete intervals excluded, never imputed | A provider gap is information, not a zero | Fewer scored cells, but no invented observations |
 | Costs | Zero in the base case; illustrative non-zero cases rerun separately | Rates are not calibrated German project estimates | Margins are gross of asset-specific costs and of all capital costs |
-| Daily cycling | One charge-then-discharge episode in the headline | The conservative reading of a one-cycle-a-day asset, and the binding constraint on almost every day in the sample | Understates a real German battery, which cycles more than once; the two-episode stress measures by how much, and shows the extra margin needs no forecast |
-| Revenue stack | Day-ahead arbitrage only | The only market this project ingests prices for | A lower bound on a German battery's revenue: continuous intraday and the balancing markets (FCR, aFRR, mFRR, tendered via [regelleistung.net](https://www.regelleistung.net/)) are not modelled, nor is the fact that capacity committed to balancing cannot simultaneously arbitrage |
-| Storage fleet composition | Inferred from the duration ratio, not observed | Energy-Charts publishes installed battery power and energy as one aggregate with no residential/grid-scale split, and the ratio is the only composition signal the store contains | The market view's third finding rests on ~1.5 hours being a home-storage signature. If the aggregate is in fact grid-scale heavy, the argument that competition has not arrived loses its mechanism, though not the observation that margin has not compressed. The Marktstammdatenregister would settle it and is outside this project's ingestion |
+| Daily cycling | One charge-then-discharge episode in the headline | The conservative reading of a one-cycle-a-day asset, and the binding constraint on almost every day in the sample | Understates a real German battery, which cycles more than once; the two-episode stress measures by how much, and shows the simple rules earn almost all of the extra margin too |
+| Revenue stack | Day-ahead arbitrage only | The only market this project ingests prices for | Not a revenue estimate for a real battery, and not a floor: continuous intraday and the balancing markets (FCR, aFRR, mFRR, tendered via [regelleistung.net](https://www.regelleistung.net/)) would add revenue, while costs and constraints this study omits would reduce it; capacity committed to balancing also cannot arbitrage at the same time |
+| Storage fleet composition | Not observed | Energy-Charts publishes installed battery power and energy as one aggregate with no residential/grid-scale split | An average duration near 1.5 hours is consistent with a fleet of mostly home systems but does not establish it, so the market view does not rely on it. The Marktstammdatenregister would settle it and is outside this project's ingestion |
 | Storage competition set | Batteries and pumped hydro, both from the installed-capacity series | Pumped hydro arbitrages the same daily spread and is the incumbent a battery-only view would miss | Demand-side response, industrial flexibility and cross-border flexibility are not counted, so the competing fleet here is a lower bound |
 | Scope | Zonal, not nodal | The day-ahead auction clears at bidding-zone level | Congestion, basis and transmission constraints are outside the result |
 
@@ -323,8 +308,6 @@ Market rules and structure:
   before the day-ahead gate; Article 14(1)(d), day-ahead wind and solar forecasts
   due by 18:00 Brussels time on D-1 —
   [eur-lex.europa.eu](https://eur-lex.europa.eu/eli/reg/2013/543/oj/eng)
-- Bundesnetzagentur, consolidated onshore wind auction statistics —
-  [bundesnetzagentur.de](https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/Ausschreibungen/Wind_Onshore/BeendeteAusschreibungen/start.html)
 - EEG 2023 and WindSeeG 2030 capacity targets, as republished in Energy-Charts'
   `/installed_power` series
 
@@ -338,8 +321,9 @@ calibration for this project's own figures:
 
 ## Limitations
 
-The forecast is retrospective until a separately recorded four-to-six-week
-prospective period is complete. The published information set uses lagged
+The forecast is retrospective until a separately recorded six-week prospective
+period is complete, and even then that period tests the process, not the value
+across seasons. The published information set uses lagged
 realised fundamentals, not operator forecasts: day-ahead load/wind/solar
 forecasts are backfilled but carry an assigned, not observed, publication
 vintage, so they inform only the labelled ablation on the Forecasting page,

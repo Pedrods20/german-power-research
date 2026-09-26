@@ -41,8 +41,6 @@ main.observablehq p code, main.observablehq li code { overflow-wrap: anywhere; }
 </style>`,
 
   header: "",
-  // LINKEDIN: append ` · <a href="https://www.linkedin.com/in/<handle>/">Pedro Cabral on LinkedIn</a>`
-  // after the GitHub link, so every page carries it.
   footer: ({ path }) =>
     `Built from primary system-operator data. ` +
     `<a href="https://github.com/Pedrods20/german-power-research">Source and methodology on GitHub</a>.`,
