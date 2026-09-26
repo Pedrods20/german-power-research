@@ -239,6 +239,27 @@ def test_intraday_range_drops_a_partial_day_rather_than_shrinking_it() -> None:
     assert price_metrics.intraday_spread(frame.head(12), GERMANY, period="day").is_empty()
 
 
+def test_intraday_range_is_measured_on_clock_hours_whatever_the_product_resolution() -> None:
+    """Quarter-hour extremes are wider than hourly ones by construction.
+
+    DE-LU moved to 15-minute day-ahead products in October 2025. Taking the
+    day's high and low over raw intervals would widen the range at the switch
+    with no change in the market; averaging each clock hour first keeps every
+    year on the hourly basis the dispatch and forecast results use.
+    """
+    start = JUNE_15_BERLIN_MIDNIGHT
+    hourly = [float(hour) for hour in range(24)]
+    quarters = [value + offset for value in hourly for offset in (-3.0, -1.0, 1.0, 3.0)]
+    measured = [
+        price_metrics.intraday_spread(frame, GERMANY, period="day")["mean_spread"][0]
+        for frame in (
+            price_frame(hourly, start=start),
+            price_frame(quarters, start=start, resolution=15),
+        )
+    ]
+    assert measured == [APPROX(23.0), APPROX(23.0)]
+
+
 def test_hourly_shape_is_duration_weighted_and_indexes_to_baseload() -> None:
     """Quarter-hours must not outvote hours inside the same clock hour."""
     start = JUNE_15_BERLIN_MIDNIGHT

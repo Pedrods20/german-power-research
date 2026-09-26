@@ -69,19 +69,21 @@ def block_prices(frame: pl.DataFrame, zone: Zone, *, period: str = "month") -> p
 
 
 def intraday_spread(frame: pl.DataFrame, zone: Zone, *, period: str = "year") -> pl.DataFrame:
-    """Mean within-day high minus low, over complete local days.
+    """Mean within-day high minus low of clock-hour prices, over complete local days.
 
     This is the spread a battery is paid, wherever in the day the extremes fall; it
-    can widen while the clock-defined block spread collapses. It is an upper bound on
-    one cycle's gross value; :mod:`gpa.battery` measures what survives the constraints.
+    can widen while the clock-defined block spread collapses. Hours are averaged first
+    so quarter-hour products do not widen it by construction.
     """
     label = period_label(period)
     daily = (
         attach_local_time(frame, zone)
+        .group_by("local_date", "local_hour")
+        .agg(_mean_price().alias("price"), INTERVAL_HOURS.sum().alias("hours"))
         .group_by("local_date")
         .agg(
             (pl.col("price").max() - pl.col("price").min()).alias("spread"),
-            INTERVAL_HOURS.sum().alias("observed_hours"),
+            pl.col("hours").sum().alias("observed_hours"),
         )
         .filter(pl.col("observed_hours") >= _COMPLETE_DAY_HOURS)
     )
