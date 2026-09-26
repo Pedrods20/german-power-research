@@ -2,7 +2,7 @@
 
 **Day-ahead prices, solar capture and battery dispatch in Germany–Luxembourg.**
 
-Independent research by **Pedro Cabral**, Senior Specialist in Power & Renewables at S&P Global Energy, covering Brazil, Chile and Argentina.
+Independent research by **Pedro Cabral**, a power market analyst with experience in Latin American electricity markets.
 
 This project examines how the daily price profile has changed and whether better price forecasts improve battery dispatch margins.
 
@@ -41,7 +41,7 @@ Ridge-based dispatch underperformed its strongest fixed naive comparator on **82
 
 ## About me
 
-I am a Senior Specialist in Power & Renewables at S&P Global Energy, covering Brazil, Chile and Argentina. My work focuses on electricity market fundamentals, price formation and the commercial implications of the energy transition.
+I am a power market analyst with experience covering Brazil, Chile and Argentina. My work focuses on electricity market fundamentals, price formation and the commercial implications of the energy transition.
 
 This independent project extends my research to European power markets, examining German day-ahead prices and the value of forecasting for battery dispatch.
 
