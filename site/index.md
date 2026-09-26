@@ -357,19 +357,15 @@ figures published by the system operators. Two figures on the storage page
 are external citations — BloombergNEF and the Bundesnetzagentur — dated where
 they appear.
 
-## Author
+## About me
 
-**Pedro Cabral.** Built solo, end to end: ingestion of the system operators'
-public data, leakage-safe walk-forward forecasting, the constrained dispatch and
-stress-testing engine, the prospective ledger, and this site.
+**Pedro Cabral**
 
-<!-- ABOUT-ME: the same two or three sentences as the README's Author section. -->
+I am a power market analyst with experience covering Brazil, Chile and Argentina. My work focuses on electricity market fundamentals, price formation and the commercial implications of the energy transition.
 
-Code, data and the full audit trail:
-**[github.com/Pedrods20/german-power-research](https://github.com/Pedrods20/german-power-research)**
-· profile: [github.com/Pedrods20](https://github.com/Pedrods20)
+This independent project extends my research to European power markets, examining German day-ahead prices and the value of forecasting for battery dispatch.
 
-<!-- LINKEDIN: append " · [LinkedIn](https://www.linkedin.com/in/<handle>/)" to the line above. -->
+[Research repository](https://github.com/Pedrods20/german-power-research) · [GitHub profile](https://github.com/Pedrods20)
 
 ---
 
