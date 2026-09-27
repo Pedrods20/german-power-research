@@ -19,9 +19,19 @@ import numpy as np
 import numpy.typing as npt
 import polars as pl
 
-from gpa.battery import DEFAULT_MODELS, BatterySpec, SpecKwargs, backtest_predictions
+from gpa.battery import DEFAULT_MODELS, BatterySpec, SpecKwargs, backtest_predictions, dispatch
+from gpa.calendar import attach_local_time
+from gpa.reference import QUARTER_HOUR_SCHEMA
+from gpa.zones import Zone
 
 BASELINES: Final = DEFAULT_MODELS[:3]
+QUARTER_HOUR_START: Final = dt.date(2025, 10, 1)
+"""First delivery day of DE-LU's 15-minute day-ahead products."""
+
+_QUARTER_SOC_STEP_MWH: Final = 1 / 64
+"""On the hourly 0.25 MWh grid a quarter-hour at 1 MW could not move a single step."""
+
+_SURPRISE_LABELS: Final = ["1 (most typical)", "2", "3", "4", "5 (most atypical)"]
 _KEYS: Final = ["strategy", "power_mw", "energy_mwh"]
 _TABLES: Final = ("predictions", "dispatch", "summary", "coverage", "daily", "risk", "comparisons")
 _SOURCES: Final = ("battery.py", "battery_study.py")
@@ -63,6 +73,21 @@ _COMPARISON_SCHEMA: Final = {
     "ci_high_eur_mw": pl.Float64,
     "status": pl.String,
 }
+_ATTRIBUTION_SCHEMA: Final = pl.Schema(
+    {
+        "strategy": pl.String(),
+        "baseline": pl.String(),
+        "power_mw": pl.Float64(),
+        "energy_mwh": pl.Float64(),
+        "dimension": pl.String(),
+        "bucket": pl.String(),
+        "days": pl.UInt32(),
+        "day_share": pl.Float64(),
+        "incremental_eur_mw": pl.Float64(),
+        "incremental_share": pl.Float64(),
+        "mean_daily_incremental_eur_mw": pl.Float64(),
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +129,12 @@ def _assets(daily: pl.DataFrame) -> Iterator[dict[str, pl.DataFrame]]:
         yield {part["strategy"][0]: part for part in asset.partition_by("strategy")}
 
 
+def _best_naive(models: dict[str, pl.DataFrame], baselines: Sequence[str]) -> str | None:
+    """The naive with the largest sample margin: picked in hindsight, a diagnostic only."""
+    candidates = sorted(name for name in baselines if name in models)
+    return max(candidates, key=lambda n: float(models[n]["profit_eur"].sum()), default=None)
+
+
 def _top_five_share(values: npt.NDArray[np.float64]) -> float | None:
     """Share of the positive total carried by the five best days: ex-post concentration."""
     positive = values[values > 0]
@@ -139,8 +170,7 @@ def risk_metrics(daily: pl.DataFrame, *, baselines: Sequence[str] = BASELINES) -
     """
     rows = []
     for models in _assets(daily):
-        candidates = sorted(name for name in baselines if name in models)
-        best = max(candidates, key=lambda n: float(models[n]["profit_eur"].sum()), default=None)
+        best = _best_naive(models, baselines)
         for name, frame in models.items():
             values = frame["profit_eur"].to_numpy()
             cumulative = np.r_[0.0, np.cumsum(values)]
@@ -245,6 +275,164 @@ def paired_comparisons(
     return pl.DataFrame(rows, schema=_COMPARISON_SCHEMA).sort(
         "energy_mwh", "power_mw", "strategy", "baseline"
     )
+
+
+def _either(condition: pl.Expr, yes: str, no: str) -> pl.Expr:
+    return pl.when(condition).then(pl.lit(yes)).otherwise(pl.lit(no))
+
+
+def day_types(predictions: pl.DataFrame, naive: str) -> pl.DataFrame:
+    """Each day's labels, from realised prices and the naive's own forecast only.
+
+    Shape surprise ranks days by the rank correlation between the naive's hours and the
+    realised ones: quintile 5 holds the days a rule that repeats the shape misread most.
+    """
+    days = (
+        predictions.filter(pl.col("model") == naive)
+        .group_by(pl.col("local_date").cast(pl.Date))
+        .agg(
+            (pl.col("actual") < 0).any().alias("negative"),
+            pl.corr("forecast", "actual", method="spearman").fill_nan(None).alias("_rank"),
+        )
+    )
+    return days.select(
+        "local_date",
+        _either(pl.col("negative"), "Some negative hours", "No negative hours").alias(
+            "negative_prices"
+        ),
+        (-pl.col("_rank"))
+        .qcut(5, labels=_SURPRISE_LABELS, allow_duplicates=True)
+        .cast(pl.String)
+        .fill_null("Undefined")
+        .alias("shape_surprise"),
+        _either(pl.col("local_date").dt.weekday() >= 6, "Weekend", "Weekday").alias("day_type"),
+        pl.format("Q{}", pl.col("local_date").dt.quarter()).alias("quarter"),
+    )
+
+
+def attribution(
+    daily: pl.DataFrame,
+    predictions: pl.DataFrame,
+    *,
+    strategy: str = "ridge",
+    baselines: Sequence[str] = BASELINES,
+) -> pl.DataFrame:
+    """Where a model's margin over the best naive was earned, by day labels fixed in advance.
+
+    A group's share can exceed 100% or turn negative: days where the model lost offset
+    the rest.
+    """
+    frames = []
+    for models in _assets(daily):
+        best = _best_naive(models, baselines)
+        if best is None or strategy not in models:
+            continue
+        model = models[strategy]
+        power, energy = float(model["power_mw"][0]), float(model["energy_mwh"][0])
+        days = model.select(
+            "local_date",
+            ((model["profit_eur"] - models[best]["profit_eur"]) / power).alias("incremental"),
+        ).join(day_types(predictions, best), on="local_date", how="left")
+        total = float(days["incremental"].sum())
+        for dimension in ("negative_prices", "shape_surprise", "day_type", "quarter"):
+            frames.append(
+                days.group_by(pl.col(dimension).alias("bucket"))
+                .agg(
+                    pl.len().cast(pl.UInt32).alias("days"),
+                    pl.col("incremental").sum().alias("incremental_eur_mw"),
+                )
+                .with_columns(
+                    strategy=pl.lit(strategy),
+                    baseline=pl.lit(best),
+                    power_mw=pl.lit(power),
+                    energy_mwh=pl.lit(energy),
+                    dimension=pl.lit(dimension),
+                    day_share=pl.col("days") / days.height,
+                    incremental_share=pl.col("incremental_eur_mw") / total,
+                    mean_daily_incremental_eur_mw=pl.col("incremental_eur_mw") / pl.col("days"),
+                )
+            )
+    if not frames:
+        return pl.DataFrame(schema=_ATTRIBUTION_SCHEMA)
+    return (
+        pl.concat(frames)
+        .select(list(_ATTRIBUTION_SCHEMA))
+        .cast(_ATTRIBUTION_SCHEMA)
+        .sort("energy_mwh", "strategy", "dimension", "bucket")
+    )
+
+
+def quarter_hour_value(
+    prices: pl.DataFrame, zone: Zone, *, durations_mwh: Sequence[float] = (1.0, 2.0, 4.0)
+) -> pl.DataFrame:
+    """What trading quarter-hours instead of hours is worth to the same battery.
+
+    Both cases dispatch quarter-hours on one SOC grid and differ only in price: each
+    quarter-hour's own, or its hour's average, which a flat hourly trade settles at.
+    Perfect foresight is the ceiling and repeating the previous day the simple rule. Only
+    96-interval days after a 96-interval day are used, so clock-change days drop out.
+    """
+    local = attach_local_time(prices.filter(pl.col("resolution_min") == 15), zone).filter(
+        pl.col("local_date") >= QUARTER_HOUR_START
+    )
+    full = local.group_by("local_date").len().filter(pl.col("len") == 96)["local_date"]
+    frame = (
+        local.filter(pl.col("local_date").is_in(full.to_list()))
+        .sort("ts_utc")
+        .with_columns(
+            pl.int_range(pl.len()).over("local_date").alias("slot"),
+            pl.col("price").mean().over("local_date", "local_hour").alias("hourly"),
+        )
+    )
+    previous = frame.select(
+        pl.col("local_date") + pl.duration(days=1),
+        "slot",
+        pl.col("price").alias("previous_price"),
+        pl.col("hourly").alias("previous_hourly"),
+    )
+    frame = frame.join(previous, on=["local_date", "slot"])
+    if frame.is_empty():
+        return pl.DataFrame(schema=QUARTER_HOUR_SCHEMA)
+    start, end = frame["local_date"].min(), frame["local_date"].max()
+    rows = []
+    for size in durations_mwh:
+        spec = BatterySpec(energy_mwh=float(size), soc_step_mwh=_QUARTER_SOC_STEP_MWH)
+        for resolution, actual, naive in (
+            ("quarter_hour", "price", "previous_price"),
+            ("hourly", "hourly", "previous_hourly"),
+        ):
+            for strategy, forecast in (
+                ("perfect_foresight", actual),
+                ("naive_previous_day", naive),
+            ):
+                settled = dispatch(
+                    frame.select(
+                        "ts_utc",
+                        "local_date",
+                        "local_hour",
+                        pl.lit(0.25).alias("duration_hours"),
+                        pl.col(forecast).alias("forecast"),
+                        pl.col(actual).alias("actual"),
+                    ),
+                    spec,
+                    strategy=strategy,
+                    timezone=zone.timezone,
+                )
+                days, profit = settled["local_date"].n_unique(), float(settled["profit_eur"].sum())
+                rows.append(
+                    {
+                        "strategy": strategy,
+                        "resolution": resolution,
+                        "power_mw": spec.power_mw,
+                        "energy_mwh": spec.energy_mwh,
+                        "days": days,
+                        "profit_eur": profit,
+                        "eur_per_mw_day": profit / spec.power_mw / days,
+                        "sample_start": start,
+                        "sample_end": end,
+                    }
+                )
+    return pl.DataFrame(rows, schema=QUARTER_HOUR_SCHEMA)
 
 
 def _prediction_hash(predictions: pl.DataFrame) -> str:

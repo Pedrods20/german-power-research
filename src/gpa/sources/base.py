@@ -124,11 +124,21 @@ def _throttle_delay(response: httpx.Response, attempt: int) -> float:
         return _THROTTLE_BACKOFF_SECONDS * attempt
 
 
-def fetch_json(url: str, *, client: httpx.Client | None = None, **kwargs: Any) -> Any:
-    """GET and decode JSON, retrying transient failures; anything else is an ``UpstreamError``."""
+def _get(url: str, client: httpx.Client | None, **kwargs: Any) -> httpx.Response:
     response = _request("GET", url, client=client, **kwargs)
     if response.status_code >= 400:
         raise UpstreamError(f"{response.status_code} from {url}: {response.text[:200]}")
+    return response
+
+
+def fetch_bytes(url: str, *, client: httpx.Client | None = None, **kwargs: Any) -> bytes:
+    """GET a binary body, such as a workbook, with the same retries as ``fetch_json``."""
+    return _get(url, client, **kwargs).content
+
+
+def fetch_json(url: str, *, client: httpx.Client | None = None, **kwargs: Any) -> Any:
+    """GET and decode JSON, retrying transient failures; anything else is an ``UpstreamError``."""
+    response = _get(url, client, **kwargs)
     try:
         return response.json()
     except ValueError as exc:

@@ -42,6 +42,32 @@ ABLATION_SCHEMA = pl.Schema(
 )
 """Overall scores with and without fundamentals: a labelled diagnostic, never a release."""
 
+QUARTER_HOUR_SCHEMA = pl.Schema(
+    {
+        "strategy": pl.String,
+        "resolution": pl.String,
+        "power_mw": pl.Float64,
+        "energy_mwh": pl.Float64,
+        "days": pl.UInt32,
+        "profit_eur": pl.Float64,
+        "eur_per_mw_day": pl.Float64,
+        "sample_start": pl.Date,
+        "sample_end": pl.Date,
+    }
+)
+"""Battery margin on quarter-hour prices against the same days' hourly averages."""
+
+BALANCING_SCHEMA = pl.Schema(
+    {
+        "delivery_date": pl.Date,
+        "product": pl.String,
+        "block_start_hour": pl.Int8,
+        "price_eur_mw_h": pl.Float64,
+        "source": pl.String,
+    }
+)
+"""German balancing capacity prices per four-hour block: FCR, aFRR_POS and aFRR_NEG."""
+
 _TABLES = {
     "capacity": (
         "capacity/installed_power.parquet",
@@ -52,6 +78,16 @@ _TABLES = {
         "fundamentals_ablation/scores.parquet",
         ABLATION_SCHEMA,
         ["model", "include_fundamentals"],
+    ),
+    "quarter_hour_value": (
+        "quarter_hour_value/margins.parquet",
+        QUARTER_HOUR_SCHEMA,
+        ["energy_mwh", "strategy", "resolution"],
+    ),
+    "balancing_capacity": (
+        "balancing/capacity_results.parquet",
+        BALANCING_SCHEMA,
+        ["delivery_date", "product", "block_start_hour"],
     ),
 }
 

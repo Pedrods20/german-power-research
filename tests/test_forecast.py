@@ -474,3 +474,34 @@ def test_empty_history_and_fixed_alpha():
             min_train_rows=10,
             grid=(),
         )
+
+
+def test_decision_metrics_score_the_hours_a_battery_acts_on():
+    """``exact`` repeats the realised day; ``late`` moves its trough and peak by three hours.
+
+    Hour 3 is the only negative one: the exact forecast flags it, the late one flags the
+    wrong hour, and a lower quantile below zero everywhere catches it at 1-in-24 precision.
+    """
+    actual = [50.0 + 10.0 * min(hour, 23 - hour) for hour in range(24)]
+    actual[3], actual[12] = -5.0, 200.0
+    late = actual[-3:] + actual[:-3]
+    rows = [
+        {
+            "model": model,
+            "local_date": dt.date(2025, 2, 10),
+            "local_hour": hour,
+            "forecast": forecast[hour],
+            "actual": actual[hour],
+            "q10": forecast[hour] - 1_000.0,
+        }
+        for model, forecast in (("exact", actual), ("late", late))
+        for hour in range(24)
+    ]
+    result = {row["model"]: row for row in scoring.decision_metrics(pl.DataFrame(rows)).to_dicts()}
+    assert result["exact"]["trough_hit_pct"] == result["exact"]["peak_hit_pct"] == 100.0
+    assert result["late"]["trough_hit_pct"] == result["late"]["peak_hit_pct"] == 0.0
+    assert result["exact"]["spread_mae"] == 0.0
+    assert result["exact"]["point_precision_pct"] == result["exact"]["point_recall_pct"] == 100.0
+    assert result["late"]["point_recall_pct"] == 0.0
+    assert result["exact"]["risk_recall_pct"] == 100.0
+    assert result["exact"]["risk_precision_pct"] == pytest.approx(100.0 / 24)

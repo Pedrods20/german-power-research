@@ -18,6 +18,7 @@ from polars.testing import assert_frame_equal
 
 from gpa import reference, store
 from gpa.battery import DEFAULT_MODELS
+from gpa.forecast.scoring import decision_metrics
 from gpa.metrics import mix as mix_metrics
 from gpa.metrics import price as price_metrics
 from gpa.zones import Zone, get_zone
@@ -86,10 +87,12 @@ def export_all(output: Path | None = None) -> dict[str, int]:
         "capacity_extrapolation_flags": _capacity_extrapolation_flags(capacity, price_cutoff),
         "forecast_scores": _tag(frames["scores"]),
         "forecast_daily": _tag(frames["daily"]),
+        "forecast_decisions": _tag(decision_metrics(frames["predictions"])),
         "forecast_preview": _forecast_page_predictions(predictions),
         **battery,
         "battery_margin_yearly": margin,
         "battery_competition_correlation": _battery_competition_correlation(margin, release_cutoff),
+        "quarter_hour_value": _tag(reference.read("quarter_hour_value")),
     }
     written = {}
     for name, frame in tables.items():
@@ -446,7 +449,8 @@ def _battery_margin_yearly(monthly: pl.DataFrame, capacity: pl.DataFrame) -> pl.
 def _battery_tables(predictions: pl.DataFrame) -> dict[str, pl.DataFrame]:
     """The storage page's economics, frozen with the same release as the forecast."""
     from gpa.battery_sensitivity import scenario_tables
-    from gpa.battery_study import evaluate
+    from gpa.battery_study import attribution, evaluate
+    from gpa.revenue_stack import revenue_stack
 
     names = (
         "battery_monthly",
@@ -457,6 +461,8 @@ def _battery_tables(predictions: pl.DataFrame) -> dict[str, pl.DataFrame]:
         "battery_coverage",
         "battery_costs",
         "battery_sensitivities",
+        "battery_attribution",
+        "revenue_stack",
     )
     if predictions.is_empty():
         return dict.fromkeys(names, pl.DataFrame())
@@ -481,6 +487,8 @@ def _battery_tables(predictions: pl.DataFrame) -> dict[str, pl.DataFrame]:
         base.coverage,
         costs,
         sensitivities,
+        attribution(base.daily, predictions),
+        revenue_stack(base.daily, base.dispatch, reference.read("balancing_capacity")),
     )
     return {name: _tag(frame) for name, frame in zip(names, frames, strict=True)}
 

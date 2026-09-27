@@ -6,9 +6,17 @@ import polars as pl
 import pytest
 from typer.testing import CliRunner
 
-from gpa.battery_study import evaluate, paired_comparisons, risk_metrics, save_study
+from gpa.battery_study import (
+    attribution,
+    evaluate,
+    paired_comparisons,
+    quarter_hour_value,
+    risk_metrics,
+    save_study,
+)
 from gpa.cli import app
-from tests.test_battery import DAY, predictions
+from gpa.zones import get_zone
+from tests.test_battery import DAY, TZ, predictions
 
 
 def daily_sample(values, *, baseline=None, days=None):
@@ -161,3 +169,85 @@ def test_local_study_command_does_not_read_or_mutate_the_live_store(tmp_path, mo
     assert "Research study" in result.output
     assert len(list(output.glob("*/manifest.json"))) == 1
     assert not (tmp_path / "no-live-data").exists()
+
+
+def _shaped_days(count: int) -> pl.DataFrame:
+    """The naive's forecast on day ``i`` reverses the first ``2i`` realised hours.
+
+    Rank correlation with the realised day therefore falls day by day, so the first day
+    is the most typical and the last the most atypical; the last day also dips below zero.
+    """
+    rows = []
+    for i in range(count):
+        actual = [
+            float(hour) - (30.0 if i == count - 1 and hour == 0 else 0.0) for hour in range(24)
+        ]
+        forecast = actual[: 2 * i][::-1] + actual[2 * i :]
+        rows += [
+            {
+                "model": "naive_previous_day",
+                "local_date": DAY + dt.timedelta(days=i),
+                "local_hour": hour,
+                "forecast": forecast[hour],
+                "actual": actual[hour],
+            }
+            for hour in range(24)
+        ]
+    return pl.DataFrame(rows)
+
+
+def test_attribution_splits_the_whole_increment_by_labels_that_ignore_the_model():
+    increments = [float(i) for i in range(10)]
+    daily = daily_sample([10.0 + x for x in increments], baseline=[10.0] * 10)
+    result = attribution(daily, _shaped_days(10))
+    for dimension in result.partition_by("dimension"):
+        assert dimension["incremental_eur_mw"].sum() == pytest.approx(sum(increments))
+        assert dimension["days"].sum() == 10
+        assert dimension["incremental_share"].sum() == pytest.approx(1.0)
+    groups = {
+        (row["dimension"], row["bucket"]): row["incremental_eur_mw"]
+        for row in result.iter_rows(named=True)
+    }
+    # Days 0-1 are the most typical and days 8-9 the most atypical.
+    assert groups[("shape_surprise", "1 (most typical)")] == pytest.approx(0.0 + 1.0)
+    assert groups[("shape_surprise", "5 (most atypical)")] == pytest.approx(8.0 + 9.0)
+    assert groups[("negative_prices", "Some negative hours")] == pytest.approx(9.0)
+    # 10 February 2025 is a Monday, so the sample holds one weekend.
+    assert groups[("day_type", "Weekend")] == pytest.approx(5.0 + 6.0)
+
+
+def _quarter_prices(days: int, *, spike: float) -> pl.DataFrame:
+    """Quarter-hour prices from 6 October 2025; ``spike`` widens each hour's quarters."""
+    start = dt.datetime(2025, 10, 6, tzinfo=TZ).astimezone(dt.UTC)
+    stamps = [start + dt.timedelta(minutes=15 * i) for i in range(96 * days)]
+    shape = [0.0 if (i // 4) % 24 < 12 else 100.0 for i in range(96 * days)]
+    offsets = [(-spike, 0.0, 0.0, spike)[i % 4] for i in range(96 * days)]
+    return pl.DataFrame(
+        {
+            "zone": "DE-LU",
+            "ts_utc": stamps,
+            "resolution_min": 15,
+            "price": [base + offset for base, offset in zip(shape, offsets, strict=True)],
+            "currency": "EUR",
+            "source": "test",
+        },
+        schema_overrides={"ts_utc": pl.Datetime("us", "UTC"), "resolution_min": pl.Int16},
+    )
+
+
+def test_quarter_hours_add_nothing_when_each_hour_is_flat_and_value_when_it_is_not():
+    zone = get_zone("DE-LU")
+    flat = quarter_hour_value(_quarter_prices(3, spike=0.0), zone, durations_mwh=(1.0,))
+    assert flat["days"].unique().to_list() == [2]  # the first day has no previous day
+    by = {
+        (row["strategy"], row["resolution"]): row["profit_eur"]
+        for row in flat.iter_rows(named=True)
+    }
+    for strategy in ("perfect_foresight", "naive_previous_day"):
+        assert by[(strategy, "quarter_hour")] == pytest.approx(by[(strategy, "hourly")])
+    spiky = quarter_hour_value(_quarter_prices(3, spike=40.0), zone, durations_mwh=(1.0,))
+    margin = {
+        row["resolution"]: row["profit_eur"]
+        for row in spiky.filter(pl.col("strategy") == "perfect_foresight").iter_rows(named=True)
+    }
+    assert margin["quarter_hour"] > margin["hourly"]

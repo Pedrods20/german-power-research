@@ -6,6 +6,7 @@ import contextlib
 import datetime as dt
 import logging
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Annotated
@@ -132,6 +133,45 @@ def capacity(zone: ZoneOption = "DE-LU", verbose: VerboseOption = False) -> None
         f"Wrote {frame.height} rows ({frame['technology'].n_unique()} technologies) to {path}.",
         fg=typer.colors.GREEN,
     )
+
+
+@app.command()
+def balancing(
+    start: Annotated[str, typer.Option(help="First delivery day, YYYY-MM-DD.")] = "2020-11-03",
+    end: Annotated[str | None, typer.Option(help="Last delivery day; default tomorrow.")] = None,
+    pause: Annotated[float, typer.Option(help="Seconds between requests.")] = 0.5,
+    verbose: VerboseOption = False,
+) -> None:
+    """Add the German FCR and aFRR capacity auction results the reference table lacks."""
+    _configure_logging(verbose)
+    from gpa.sources.base import SourceError, http_client
+    from gpa.sources.regelleistung import PRODUCTS, fetch_capacity_results
+
+    first = dt.date.fromisoformat(start)
+    last = dt.date.fromisoformat(end) if end else _tomorrow(get_zone("DE-LU"))
+    frames = [reference.read("balancing_capacity")]
+    held = set(frames[0].select("delivery_date", pl.col("product").str.head(4)).iter_rows())
+    missing = [
+        (first + dt.timedelta(days=offset), product)
+        for offset in range((last - first).days + 1)
+        for product in PRODUCTS
+        if (first + dt.timedelta(days=offset), product[:4]) not in held
+    ]
+    failures = []
+    with http_client() as client:
+        for count, (day, product) in enumerate(missing, 1):
+            try:
+                frames.append(fetch_capacity_results(day, product, client=client))
+            except SourceError as exc:
+                failures.append(f"{day} {product}: {exc}")
+            # Written as it goes, so an interrupted backfill keeps what it fetched.
+            if count % 60 == 0 or count == len(missing):
+                reference.write("balancing_capacity", pl.concat(frames))
+            time.sleep(pause)
+    typer.echo(f"Fetched {len(missing) - len(failures)} of {len(missing)} missing workbooks.")
+    if failures:
+        typer.secho("\n".join(failures[:20]), fg=typer.colors.RED)
+        raise typer.Exit(1)
 
 
 @app.command("probe-fundamentals")
@@ -377,6 +417,19 @@ def fundamentals_ablation(zone: ZoneOption = "DE-LU", verbose: VerboseOption = F
     destination = reference.write("fundamentals_ablation", combined)
     _print(combined, width=160, precision=2)
     typer.secho(f"Wrote {combined.height} rows to {destination}.", fg=typer.colors.GREEN)
+
+
+@app.command("quarter-hour-study")
+def quarter_hour_study(zone: ZoneOption = "DE-LU", verbose: VerboseOption = False) -> None:
+    """Value 15-minute day-ahead products for a battery against hourly ones; slow."""
+    _configure_logging(verbose)
+    from gpa.battery_study import quarter_hour_value
+
+    market = get_zone(zone)
+    frame = quarter_hour_value(store.read("price", market.code), market)
+    destination = reference.write("quarter_hour_value", frame)
+    _print(frame, width=160, precision=2)
+    typer.secho(f"Wrote {frame.height} rows to {destination}.", fg=typer.colors.GREEN)
 
 
 @app.command()

@@ -24,6 +24,7 @@ __all__ = [
     "attach_quantiles",
     "attach_regime",
     "daily_errors",
+    "decision_metrics",
     "quantile_column",
     "scoreboard",
 ]
@@ -199,6 +200,56 @@ def scoreboard(
         )
         .select(columns)
         .sort("scope", "bucket", "mae")
+    )
+
+
+def _rate(hits: pl.Expr, total: pl.Expr) -> pl.Expr:
+    return pl.when(total > 0).then(hits / total * 100.0)
+
+
+def decision_metrics(predictions: pl.DataFrame) -> pl.DataFrame:
+    """Whether a forecast points a battery at the right hours, beside how close it is.
+
+    A day's cheapest and dearest forecast hours hit when within an hour of the realised
+    ones. Negative hours are flagged by the point forecast or, more cautiously, by the
+    lower quantile: precision is how often a flag was right, recall how many it caught.
+    """
+    hour = pl.col("local_hour").cast(pl.Int16)
+    planned, realised = hour.sort_by("forecast"), hour.sort_by("actual")
+    spread = [pl.col(column).max() - pl.col(column).min() for column in ("forecast", "actual")]
+    days = predictions.group_by("model", "local_date").agg(
+        ((planned.first() - realised.first()).abs() <= 1).alias("trough"),
+        ((planned.last() - realised.last()).abs() <= 1).alias("peak"),
+        (spread[0] - spread[1]).alias("spread_error"),
+    )
+    lower = quantile_column(QUANTILE_LEVELS[0])
+    # A release without intervals has no risk flag, and its rates stay null.
+    low = pl.col(lower) if lower in predictions.columns else pl.lit(None, dtype=pl.Float64)
+    negative = pl.col("actual") < 0.0
+    rates = []
+    for name, flag, known in (
+        ("point", pl.col("forecast") < 0.0, pl.lit(True)),
+        ("risk", low < 0.0, low.is_not_null()),
+    ):
+        caught = (flag & negative).filter(known).sum()
+        rates += [
+            _rate(caught, flag.filter(known).sum()).alias(f"{name}_precision_pct"),
+            _rate(caught, negative.filter(known).sum()).alias(f"{name}_recall_pct"),
+        ]
+    hours = predictions.group_by("model").agg(
+        negative.sum().cast(pl.UInt32).alias("negative_hours"), *rates
+    )
+    return (
+        days.group_by("model")
+        .agg(
+            pl.len().cast(pl.UInt32).alias("days"),
+            (pl.col("trough").mean() * 100.0).alias("trough_hit_pct"),
+            (pl.col("peak").mean() * 100.0).alias("peak_hit_pct"),
+            pl.col("spread_error").abs().mean().alias("spread_mae"),
+            pl.col("spread_error").mean().alias("spread_bias"),
+        )
+        .join(hours, on="model")
+        .sort("model")
     )
 
 

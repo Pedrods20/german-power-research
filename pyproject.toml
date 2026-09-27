@@ -20,6 +20,8 @@ dependencies = [
     "lightgbm>=4.6,<5",
     # Keep annotations compatible with the declared Python 3.11 mypy target.
     "numpy>=2.1,<2.3",
+    # regelleistung.net serves its auction results only as workbooks.
+    "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]
