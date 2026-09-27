@@ -36,7 +36,7 @@ try {
           const cumulative = page.locator('#battery-cumulative');
           await expect(cumulative).toBeVisible({timeout: 10000});
           await expect(cumulative.locator('g[aria-label="line"] path')).toHaveCount(7);
-          for (const id of ['battery-scoreboard', 'battery-comparisons', 'battery-costs', 'battery-sensitivities', 'battery-risk', 'battery-durations']) {
+          for (const id of ['battery-scoreboard', 'battery-comparisons', 'battery-by-year', 'battery-quarter-hours', 'battery-revenue-stack', 'battery-costs', 'battery-sensitivities', 'battery-risk', 'battery-durations']) {
             const table = page.locator(`#${id}`);
             await expect(table).toBeVisible();
             await expect(table.locator('tbody tr').first()).toBeVisible();

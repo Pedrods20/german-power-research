@@ -23,6 +23,9 @@ const capacityYearly = [...await FileAttachment("data/capacity_price_yearly.parq
 const capacityCorrelation = [...await FileAttachment("data/capacity_price_correlation.parquet").parquet()];
 const extrapolationFlags = [...await FileAttachment("data/capacity_extrapolation_flags.parquet").parquet()];
 const competitionCorrelation = [...await FileAttachment("data/battery_competition_correlation.parquet").parquet()];
+const attributionRows = [...await FileAttachment("data/battery_attribution.parquet").parquet()];
+const quarterHours = [...await FileAttachment("data/quarter_hour_value.parquet").parquet()];
+const revenueStack = [...await FileAttachment("data/revenue_stack.parquet").parquet()];
 const gw = (value) => value == null ? "n/a" : value.toFixed(1);
 const labels = new Map([
   ["ridge", "Ridge"], ["lightgbm", "LightGBM"],
@@ -166,6 +169,44 @@ has been broadly stable since 2023, but relative to the simple rule it fell from
 ${pct(year2023.uplift)} to ${pct(lastYear.uplift)}. The more regular the
 solar-driven shape, the more a rule that repeats it captures on its own.
 
+## Where the forecast earns
+
+```js
+const byGroup = (dimension) => attributionRows.filter((d) => asset(d) && d.dimension === dimension).sort((a, b) => a.bucket.localeCompare(b.bucket));
+const surprise = byGroup("shape_surprise");
+const typical = surprise.filter((d) => d.bucket.startsWith("1") || d.bucket.startsWith("2"));
+const atypical = surprise.find((d) => d.bucket.startsWith("5"));
+const negativeDays = byGroup("negative_prices");
+const withNegative = negativeDays.find((d) => d.bucket === "Some negative hours");
+const withoutNegative = negativeDays.find((d) => d.bucket === "No negative hours");
+```
+
+```js
+Plot.plot({
+  title: "The forecast earns on the days the simple rule misreads",
+  subtitle: `Ridge's margin over ${name(headline.best_naive)}, EUR/MW per day, by how far each day's price shape departed from the ${name(headline.best_naive)} forecast (quintiles, judged after the fact). ${duration}h battery.`,
+  width, height: 260, marginLeft: 60, marginBottom: 40,
+  x: {label: null, domain: surprise.map((d) => d.bucket)},
+  y: {label: "EUR/MW per day", grid: true},
+  marks: [
+    Plot.barY(surprise, {x: "bucket", y: "mean_daily_incremental_eur_mw", fill: (d) => d.mean_daily_incremental_eur_mw < 0 ? "#D55E00" : "#0072B2", tip: true}),
+    Plot.ruleY([0]),
+  ],
+})
+```
+
+On the ${pct(d3.sum(typical, (d) => d.day_share))} of days whose shape was most
+typical, Ridge **loses** to the simple rule, by EUR
+${euro(-d3.sum(typical, (d) => d.incremental_eur_mw) / d3.sum(typical, (d) => d.days))}/MW a
+day. The ${pct(atypical.day_share)} most atypical days carry
+**${pct(atypical.incremental_share)}** of its total gain. Negative-price days are
+not where it earns: EUR ${euro(withNegative.mean_daily_incremental_eur_mw)}/MW a day
+there, against ${euro(withoutNegative.mean_daily_incremental_eur_mw)} on other days,
+in line with its weak negative-price calls on the [forecast page](./forecast).
+This suggests a switch a desk could test: follow the recurring shape, and act on
+the forecast only when it disagrees strongly with that shape. This study has not
+tested that rule.
+
 ## How a forecast becomes a decision
 
 ```js
@@ -207,6 +248,100 @@ Plot.plot({
   ],
 })
 ```
+
+## What 15-minute products are worth
+
+```js
+const qh = (strategy, resolution) => quarterHours.find((d) => d.energy_mwh === duration && d.strategy === strategy && d.resolution === resolution);
+const qhRows = ["perfect_foresight", "naive_previous_day"].map((strategy) => ({strategy, hourly: qh(strategy, "hourly"), quarter: qh(strategy, "quarter_hour")}));
+const qhUplift = (row) => row.quarter.eur_per_mw_day / row.hourly.eur_per_mw_day - 1;
+const qhOneHour = quarterHours.filter((d) => d.energy_mwh === 1);
+const qhFourHours = quarterHours.filter((d) => d.energy_mwh === 4);
+const upliftAt = (rows, strategy) => rows.find((d) => d.strategy === strategy && d.resolution === "quarter_hour").eur_per_mw_day / rows.find((d) => d.strategy === strategy && d.resolution === "hourly").eur_per_mw_day - 1;
+```
+
+```js
+renderTable("battery-quarter-hours", qhRows.map((row) => ({
+  Strategy: row.strategy === "naive_previous_day" ? "Repeat the previous day" : name(row.strategy),
+  "Hourly (EUR/MW/d)": row.hourly.eur_per_mw_day,
+  "Quarter-hour (EUR/MW/d)": row.quarter.eur_per_mw_day,
+  Uplift: qhUplift(row),
+})), {"Hourly (EUR/MW/d)": euro, "Quarter-hour (EUR/MW/d)": euro, Uplift: pct})
+```
+
+Since October 2025 the auction clears quarter-hours. On the same
+${qhRows[0].quarter.days} days (${qhRows[0].quarter.sample_start} to
+${qhRows[0].quarter.sample_end}), trading quarter-hours instead of hours raises
+the perfect-foresight margin by ${pct(upliftAt(qhOneHour, "perfect_foresight"))} for
+a 1-hour battery and ${pct(upliftAt(qhFourHours, "perfect_foresight"))} for a 4-hour
+one. Quarter-hour extremes widen the daily price range by about 16%, but a
+battery that moves energy over several hours captures only part of that: the
+shorter the battery, the more the finer products are worth. A rule that repeats
+the previous day's quarter-hours keeps most of the gain. The forecast on this site
+is still hourly, so none of this value is in its results.
+
+## Day-ahead is one market among several
+
+```js
+const marketNames = new Map([
+  ["day_ahead", "Day-ahead arbitrage (Ridge)"],
+  ["day_ahead_perfect", "Day-ahead, perfect foresight"],
+  ["fcr", "FCR capacity"],
+  ["afrr", "aFRR capacity, up and down"],
+  ["ex_ante_rule", "Ex-ante daily choice"],
+  ["hindsight_best", "Best market in hindsight"],
+]);
+const stack = revenueStack.filter((d) => d.energy_mwh === duration);
+const stackYears = stack.filter((d) => d.year !== "all" && ["day_ahead", "fcr", "afrr"].includes(d.market));
+const stackAt = (year, market) => stack.find((d) => d.year === year && d.market === market);
+const stackTotal = (market) => stackAt("all", market);
+const stackLast = d3.max(stackYears, (d) => d.year);
+const closing = (year) => stackAt(year, "day_ahead").eur_per_mw_day / stackAt(year, "afrr").eur_per_mw_day;
+```
+
+```js
+Plot.plot({
+  title: "Balancing paid more per MW; day-ahead arbitrage is closing the gap",
+  subtitle: `EUR per MW per day, ${duration}h battery. Balancing is capacity revenue only; 2020 starts in November and ${stackLast} is year to date.`,
+  width, height: 300, marginLeft: 60,
+  x: {type: "band", label: null},
+  y: {label: "EUR/MW per day", grid: true},
+  color: {legend: true, domain: ["aFRR capacity, up and down", "FCR capacity", "Day-ahead arbitrage (Ridge)"], range: ["#009E73", "#CC79A7", "#0072B2"]},
+  marks: [
+    Plot.lineY(stackYears, {x: "year", y: "eur_per_mw_day", stroke: (d) => marketNames.get(d.market), strokeWidth: 2.5, marker: "circle", tip: true}),
+    Plot.ruleY([0]),
+  ],
+})
+```
+
+```js
+renderTable("battery-revenue-stack", [...marketNames.keys()].map((market) => stackTotal(market)).map((d) => ({
+  Market: marketNames.get(d.market),
+  "EUR/MW per day": d.eur_per_mw_day,
+  "Days the rule chose it": d.rule_days,
+})), {"EUR/MW per day": euro, "Days the rule chose it": (v) => v == null ? "" : euro(v)})
+```
+
+Over the ${stackTotal("afrr").days.toLocaleString("en")} days from November 2020
+with both markets published, aFRR capacity paid **EUR
+${euro(stackTotal("afrr").eur_per_mw_day)}/MW a day** and FCR
+${euro(stackTotal("fcr").eur_per_mw_day)}, against
+${euro(stackTotal("day_ahead").eur_per_mw_day)} for day-ahead arbitrage with the Ridge
+forecast. A rule that picks each day's market on what is known before the
+balancing auctions close chose aFRR on
+${pct(stackTotal("afrr").rule_days / stackTotal("afrr").days)} of days and earned
+${euro(stackTotal("ex_ante_rule").eur_per_mw_day)}, close to the best market in
+hindsight.
+
+Two things temper that. The balancing markets are shallow: Germany procures about
+0.6 GW of FCR and about 2 GW of aFRR each way, against 21 GW of installed
+batteries, so they cannot absorb the fleet. And these are capacity payments,
+before the prequalification, energy management and bidding risk they require;
+aFRR is pay-as-bid, so its average accepted price is not guaranteed to any bid.
+Meanwhile the gap is closing: for a ${duration}-hour battery, day-ahead arbitrage
+earned **${pct(closing("2021"))}** of the aFRR capacity value in 2021 and
+**${pct(closing(stackLast))}** in ${stackLast}. Intraday trading, activation
+energy and mFRR are not modelled.
 
 ## Costs and robustness
 
@@ -348,14 +483,15 @@ against a recorded ${gw(solarTarget.realised_max_gw)} GW AC
 (${gw(solarDcTarget.realised_max_gw)} GW DC) in ${solarTarget.realised_max_year},
 lie well beyond the range these data cover.
 
-**Competing storage has not yet compressed the margin, but that may change.**
-For the ${duration}-hour battery, the perfect-foresight margin has risen with
-Germany's battery fleet (r=${foresightCompetition.pearson_r.toFixed(2)},
-n=${foresightCompetition.n} years, ${foresightCompetition.fitted_year_min}–${foresightCompetition.fitted_year_max}).
-Over so few years, with the gas shock in the sample, this cannot rule out a
-competition effect; it only shows that one has not yet dominated. Storage
-packs are getting cheaper: global stationary-storage pack prices fell 45% in 2025
-to $70/kWh ([BloombergNEF, December 2025](https://about.bnef.com/insights/clean-transport/lithium-ion-battery-pack-prices-fall-to-108-per-kilowatt-hour-despite-rising-metal-prices-bloombergnef/)),
+**Competing storage has not yet compressed the day-ahead margin, but that may
+change.** For the ${duration}-hour battery, the perfect-foresight margin has
+risen with Germany's battery fleet (r=${foresightCompetition.pearson_r.toFixed(2)},
+n=${foresightCompetition.n} years). Over so few years, with the gas shock in the
+sample, this cannot rule out a competition effect. The shallow balancing markets
+are where a larger fleet would press first, and the day-ahead spread is the only
+market deep enough to absorb it, which makes that spread the one to watch.
+Storage packs are getting cheaper: global stationary-storage pack prices fell 45%
+in 2025 to $70/kWh ([BloombergNEF, December 2025](https://about.bnef.com/insights/clean-transport/lithium-ion-battery-pack-prices-fall-to-108-per-kilowatt-hour-despite-rising-metal-prices-bloombergnef/)),
 which lowers the barrier to new capacity. A calmer gas market or a large build of
 grid-scale storage would shrink the spread itself, not just the forecast's edge.
 

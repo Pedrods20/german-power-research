@@ -18,6 +18,7 @@ benchmark and a multi-year storage valuation need.
 |---|---|---|---|
 | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | From 2018-12-31, 94 monthly partitions | The market study, the forecast and the battery valuation |
 | Day-ahead load/wind/solar forecasts | [Energy-Charts](https://www.energy-charts.info/) | From 2019-01-05 | Labelled ablation and the prospective `ridge_da` arm |
+| FCR and aFRR capacity auction results | [regelleistung.net](https://www.regelleistung.net/) | From 2020-11-03, the first day both clear daily in four-hour blocks | The revenue-stack comparison on the storage page |
 
 The store refreshes monthly; the prospective ledger runs daily and separately.
 
@@ -225,6 +226,39 @@ not a German asset calibration. Cost rates apply to charge plus discharge at
 the grid boundary; capital and fixed/lifetime costs remain outside the model.
 See the [Battery page](./battery) for exact definitions and source attribution.
 
+**Where the forecast earns.** Each day is labelled before any model result is
+read: whether any hour cleared below zero, weekday or weekend, the quarter, and
+the quintile of "shape surprise", one minus the rank correlation between the best
+naive's hourly forecast and the realised prices. Surprise is judged after the
+fact, so it explains where the margin came from; it is not a signal a desk had
+at the gate. Groups sum to the total increment.
+
+**Decision metrics.** A day's cheapest and dearest forecast hours count as hits
+when within one hour of the realised ones. Negative hours are flagged by the
+point forecast below zero, or by the lower 10% quantile below zero; precision is
+the share of flags that were right, recall the share of negative hours flagged.
+
+**Quarter-hour value.** From 1 October 2025, each day with 96 quarter-hours after
+a day with 96 is dispatched twice with identical physics: on its quarter-hour
+prices, and on each hour's average repeated across its quarters, which a flat
+hourly schedule settles at exactly. Both use a 1/64 MWh SOC grid, because on the
+hourly 0.25 MWh grid a quarter-hour at 1 MW could not move a single step. Clock-
+change days drop out. Perfect foresight is the ceiling; repeating the previous
+day's prices, at the same resolution, is the simple rule.
+
+**Revenue stack.** FCR and aFRR capacity auction results come from the German
+TSOs' platform, one workbook per day and product, reading the German result
+only. A 1 MW battery is credited with one symmetric megawatt of FCR, or one
+megawatt of positive plus one of negative aFRR, for every four-hour block of the
+day. FCR clears at one uniform price; aFRR is pay-as-bid, so its average accepted
+price is what a typical accepted bid earned, not a price any bid was guaranteed.
+Activation energy, state-of-charge management and prequalification are not
+modelled, and neither is splitting a day between markets. The ex-ante rule
+commits each day on what is known before the balancing auctions close at 08:00
+on D-1: the previous delivery day's balancing prices, and the margin the
+day-ahead schedule expects from its own forecast, whose inputs all predate that
+hour. The best market in hindsight is a ceiling, not a strategy.
+
 ## Assumptions register
 
 Every published figure rests on the assumptions below. The battery's physical
@@ -244,7 +278,8 @@ reason each one was chosen and what it costs the result.
 | Missing data | Left missing; incomplete intervals excluded, never imputed | A provider gap is information, not a zero | Fewer scored cells, but no invented observations |
 | Costs | Zero in the base case; illustrative non-zero cases rerun separately | Rates are not calibrated German project estimates | Margins are gross of asset-specific costs and of all capital costs |
 | Daily cycling | One charge-then-discharge episode in the headline | The conservative reading of a one-cycle-a-day asset, and the binding constraint on almost every day in the sample | Understates a real German battery, which cycles more than once; the two-episode stress measures by how much, and shows the simple rules earn almost all of the extra margin too |
-| Revenue stack | Day-ahead arbitrage only | The only market this project ingests prices for | Not a revenue estimate for a real battery, and not a floor: continuous intraday and the balancing markets (FCR, aFRR, mFRR, tendered via [regelleistung.net](https://www.regelleistung.net/)) would add revenue, while costs and constraints this study omits would reduce it; capacity committed to balancing also cannot arbitrage at the same time |
+| Revenue stack | Day-ahead arbitrage, compared with FCR and aFRR capacity, one market per day | Balancing capacity results are public; intraday prices are not, and activation energy needs data this project does not ingest | Not a revenue estimate for a real battery: continuous intraday, mFRR and activation energy would add revenue, while prequalification, state-of-charge management, costs and bidding risk would reduce it |
+| Intraday market | Not modelled | No free public source for German continuous intraday prices; EPEX data is licensed | The study says nothing about intraday value or the day-ahead to intraday spread, which is the natural next step |
 | Storage fleet composition | Not observed | Energy-Charts publishes installed battery power and energy as one aggregate with no residential/grid-scale split | An average duration near 1.5 hours is consistent with a fleet of mostly home systems but does not establish it, so the market view does not rely on it. The Marktstammdatenregister would settle it and is outside this project's ingestion |
 | Storage competition set | Batteries and pumped hydro, both from the installed-capacity series | Pumped hydro arbitrages the same daily spread and is the incumbent a battery-only view would miss | Demand-side response, industrial flexibility and cross-border flexibility are not counted, so the competing fleet here is a lower bound |
 | Scope | Zonal, not nodal | The day-ahead auction clears at bidding-zone level | Congestion, basis and transmission constraints are outside the result |
@@ -267,6 +302,8 @@ the dashboard cannot silently drift from the Python analysis.
 pip install -e ".[dev]"
 gpa validate
 gpa audit
+gpa balancing            # FCR and aFRR results, incremental; slow on first run
+gpa quarter-hour-study   # the 15-minute value study; minutes
 gpa export
 npm ci
 npm run build
@@ -310,6 +347,9 @@ Market rules and structure:
   [eur-lex.europa.eu](https://eur-lex.europa.eu/eli/reg/2013/543/oj/eng)
 - EEG 2023 and WindSeeG 2030 capacity targets, as republished in Energy-Charts'
   `/installed_power` series
+- regelleistung.net, the German TSOs' balancing platform, data centre of FCR and
+  aFRR capacity auction results —
+  [regelleistung.net](https://www.regelleistung.net/)
 
 Technical and cost references, used as stated external comparisons and never as
 calibration for this project's own figures:
@@ -333,6 +373,7 @@ beside the published one and observes the delivery day's vintage rather than
 assuming it. Its first run found nothing to read before the gate, and EU
 publication rules allow that to be the norm, so the question is open and now
 starts with when the provider publishes, not with the model.
-The study is zonal, not nodal;
-congestion, basis and transmission constraints are outside scope.
+Continuous intraday trading is not modelled, for want of a free public price
+source, and balancing is compared on capacity revenue only. The study is zonal,
+not nodal; congestion, basis and transmission constraints are outside scope.
 

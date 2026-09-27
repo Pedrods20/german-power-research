@@ -10,17 +10,16 @@ const yearly = [...await FileAttachment("data/capacity_price_yearly.parquet").pa
   .sort((a, b) => a.year.localeCompare(b.year));
 const shape = [...await FileAttachment("data/price_shape.parquet").parquet()];
 const marginYearly = [...await FileAttachment("data/battery_margin_yearly.parquet").parquet()];
+const monthlyMargins = [...await FileAttachment("data/battery_monthly.parquet").parquet()];
+const attributionRows = [...await FileAttachment("data/battery_attribution.parquet").parquet()];
+const revenueStack = [...await FileAttachment("data/revenue_stack.parquet").parquet()];
+const quarterHours = [...await FileAttachment("data/quarter_hour_value.parquet").parquet()];
 const capacity = [...await FileAttachment("data/capacity.parquet").parquet()];
 const ledgerStatus = await FileAttachment("data/ledger_status.json").json();
 const ridgeArm = ledgerStatus.arms.find((d) => d.model === "ridge");
 const ledgerDate = ledgerStatus.as_of ? ledgerStatus.as_of.slice(0, 10) : "this build";
 const yearlyCap = capacity.filter((d) => d.time_step === "yearly" && !d.is_planned);
 const capAt = (technology, period) => yearlyCap.find((d) => d.technology === technology && String(d.period) === period);
-const pumped = yearlyCap
-  .filter((d) => d.technology === "Hydro pumped storage")
-  .sort((a, b) => String(a.period).localeCompare(String(b.period)));
-const pumpedFirst = pumped[0];
-const pumpedLast = pumped[pumped.length - 1];
 const fleetHours = (period) => {
   const power = capAt("Battery storage (power)", period);
   const energy = capAt("Battery storage (capacity)", period);
@@ -33,20 +32,58 @@ const crisis = yearly.find((d) => d.year === "2022");
 const foresight4 = marginYearly
   .filter((d) => d.strategy === "perfect_foresight" && d.energy_mwh === 4)
   .sort((a, b) => a.year.localeCompare(b.year));
-const fleetFirst = foresight4[0];
-const fleetLast = foresight4[foresight4.length - 1];
 const foresight = (period) => foresight4.find((d) => d.year === period);
 const eur = (v) => v.toLocaleString("en", {maximumFractionDigits: 0});
 const num = (v) => v.toFixed(1);
 const pct = (v) => `${v.toFixed(0)}%`;
+const share = (v) => pct(100 * v);
 const rate = (v) => v.toFixed(2);
 ```
 
-Solar has moved the German price peak from midday to the evening. This note
-measures the shift in Germany–Luxembourg (DE-LU) day-ahead prices, values it for
-a battery, and tests how much a price forecast adds to simple scheduling rules.
+```js
+const capture = d3.groups(monthlyMargins.filter((d) => d.energy_mwh === 4), (d) => String(d.month).slice(0, 4))
+  .map(([year, rows]) => {
+    const total = (strategy) => d3.sum(rows.filter((d) => d.strategy === strategy), (d) => d.profit_eur);
+    return {year, perfect: total("perfect_foresight"), naive: total("naive_similar_day"), ridge: total("ridge")};
+  })
+  .sort((a, b) => a.year.localeCompare(b.year));
+const captureRows = capture.flatMap((d) => [
+  {year: d.year, strategy: "Repeat the last similar day", value: 100 * d.naive / d.perfect},
+  {year: d.year, strategy: "Ridge forecast", value: 100 * d.ridge / d.perfect},
+]);
+const captureFirst = capture[0];
+const captureLast = capture[capture.length - 1];
+const surprise = attributionRows.filter((d) => d.energy_mwh === 4 && d.dimension === "shape_surprise");
+const typicalDays = surprise.filter((d) => d.bucket.startsWith("1") || d.bucket.startsWith("2"));
+const atypical = surprise.find((d) => d.bucket.startsWith("5"));
+const stack = (year, market) => revenueStack.find((d) => d.energy_mwh === 4 && d.year === year && d.market === market);
+const stackLast = d3.max(revenueStack.filter((d) => d.year !== "all"), (d) => d.year);
+const closing = (year) => stack(year, "day_ahead").eur_per_mw_day / stack(year, "afrr").eur_per_mw_day;
+const quarterUplift = (energy) => {
+  const at = (resolution) => quarterHours.find((d) => d.energy_mwh === energy && d.strategy === "perfect_foresight" && d.resolution === resolution);
+  return at("quarter_hour").eur_per_mw_day / at("hourly").eur_per_mw_day - 1;
+};
+const fleetGw = capAt("Battery storage (power)", last.year).value;
+const run = (await FileAttachment("data/forecast.json").json()).runs.find((d) => d.zone === "DE-LU");
+const sens = [...await FileAttachment("data/battery_sensitivities.parquet").parquet()];
+const base4 = sens.find((d) => d.strategy === "ridge" && d.energy_mwh === 4 && d.scenario === "base");
+```
 
-**DE-LU, ${first.year} → ${last.year} YTD** · on-peak premium **EUR
+In German day-ahead arbitrage, the recurring solar-driven price shape carries
+most of the value, and a price forecast earns on the days that shape breaks. This
+note measures the shape in Germany–Luxembourg (DE-LU) prices, values it for a
+battery against simple rules and the balancing markets, and tests what a
+forecast made at the auction gate adds.
+
+**4-hour battery:** a rule that repeats the last similar day captured
+**${pct(100 * captureFirst.naive / captureFirst.perfect)} → ${pct(100 * captureLast.naive / captureLast.perfect)}**
+of the perfect-foresight margin (${captureFirst.year} → ${captureLast.year} YTD) ·
+**${share(atypical.incremental_share)}** of the forecast's gain comes from the most
+atypical fifth of days · day-ahead arbitrage earned
+**${share(closing("2021"))} → ${share(closing(stackLast))}** of what aFRR capacity paid
+(2021 → ${stackLast})
+
+**Price shape, ${first.year} → ${last.year} YTD:** on-peak premium **EUR
 ${num(first.spread)} → ${num(last.spread)}/MWh** · daily price range
 **${pct(first.intraday_spread_pct_of_price)} → ${pct(last.intraday_spread_pct_of_price)}**
 of the average price · solar capture rate **${rate(first.solar_capture_rate)} →
@@ -55,24 +92,50 @@ ${rate(last.solar_capture_rate)}** · negative-price hours **${num(first.negativ
 
 [Forecast evidence](./forecast) · [Storage value](./battery) · [Methodology](./methodology)
 
-## 1. The on-peak premium has turned negative
+## 1. The shape carries most of the value
 
-In ${first.year}, the on-peak block (08:00–20:00 on weekdays) cleared EUR
-${num(first.spread)}/MWh above off-peak. In ${last.year} it clears EUR
-${num(Math.abs(last.spread))}/MWh below it. Installed solar rose from
-${num(first.solar_capacity_gw)} to ${num(last.solar_capacity_gw)} GW, and the
-price solar plants earn fell from ${rate(first.solar_capture_rate)} to
-${rate(last.solar_capture_rate)} of the average price. Wind's capture rate barely
-moved (${rate(first.wind_capture_rate)} → ${rate(last.wind_capture_rate)}): wind
-output is spread across the day, while solar arrives in the same hours at every
-plant.
+```js
+Plot.plot({
+  title: "A rule that repeats the shape now takes over 90% of the ceiling",
+  subtitle: "Share of the perfect-foresight day-ahead margin captured, 1 MW / 4 MWh battery, one cycle a day. 2020 starts on 3 January; the last year is year to date.",
+  width, height: 280, marginLeft: 50,
+  x: {type: "band", label: null},
+  y: {label: "% of perfect foresight", grid: true, domain: [70, 100]},
+  color: {legend: true, domain: ["Repeat the last similar day", "Ridge forecast"], range: ["#009E73", "#0072B2"]},
+  marks: [Plot.lineY(captureRows, {x: "year", y: "value", stroke: "strategy", strokeWidth: 2.5, marker: "circle", tip: true})],
+})
+```
 
-The block definition is part of the story. Drawn when demand shaped the day, it
-now contains both the cheapest midday hours and the start of the evening ramp, so
-its average says less each year. The daily high–low range, which does not depend
-on when the extremes occur, is the better measure of what flexibility is paid.
+A 1 MW / 4 MWh battery dispatched once a day can, with perfect foresight, earn
+EUR ${eur(foresight(captureLast.year).eur_per_mw_day)}/MW a day in
+${captureLast.year}. A rule that simply repeats the last similar day's prices
+captured ${pct(100 * captureFirst.naive / captureFirst.perfect)} of that in
+${captureFirst.year} and **${pct(100 * captureLast.naive / captureLast.perfect)}**
+in ${captureLast.year}. The forecast sits a few points above it every year. The
+more regular the solar-driven shape becomes, the less room is left for a
+forecast.
 
-## 2. The daily range widened: a change in shape, not in price level
+## 2. The forecast earns when the shape breaks
+
+A per-hour Ridge regression, using only what is known at the 12:00 auction gate
+on the day before delivery, cuts the mean absolute price error by
+${num(run.best_skill_vs_best_baseline_pct)}% against the best naive forecast and
+picks the day's cheapest and dearest hours more often. For the 4-hour battery that
+is worth about EUR ${eur(base4.incremental_vs_best_naive_eur_mw / (base4.days / 365.25))}/MW
+a year over the simple rule, ${share(base4.incremental_vs_best_naive_eur_mw / base4.profit_eur)}
+of the battery's gross margin.
+
+Where it earns matters more than how much. On the
+${share(d3.sum(typicalDays, (d) => d.day_share))} of days whose shape was most
+typical, Ridge **loses** to the simple rule; the most atypical fifth of days
+carries **${share(atypical.incremental_share)}** of its gain. Negative-price days
+are not where it earns. The desk reading is a switch: follow the recurring
+shape, and act on the forecast only when it disagrees strongly with it. This
+study has not yet tested that rule.
+
+[Forecast evidence](./forecast) · [Storage value](./battery)
+
+## 3. Why the shape exists
 
 ```js
 const spreadSeries = yearly.flatMap((d) => [
@@ -85,7 +148,7 @@ const spreadSeries = yearly.flatMap((d) => [
 Plot.plot({
   title: "The block premium fell as the daily range widened",
   subtitle: "Both as a percentage of each year's average price. The range uses hourly prices throughout. 2026 is year to date.",
-  width, height: 340, marginLeft: 60, marginBottom: 40,
+  width, height: 320, marginLeft: 60, marginBottom: 40,
   x: {type: "band", label: null},
   y: {label: "% of that year's average price", grid: true},
   color: {legend: true, domain: ["On-peak minus off-peak block", "Daily high minus low"], range: ["#CC79A7", "#0072B2"]},
@@ -96,13 +159,17 @@ Plot.plot({
 })
 ```
 
-The gap between the day's highest and lowest hourly price rose from
-**${pct(first.intraday_spread_pct_of_price)}** of the average price in
-${first.year} to **${pct(last.intraday_spread_pct_of_price)}** in ${last.year}.
-${crisis.year}, the most expensive year in the sample, sits at
-${pct(crisis.intraday_spread_pct_of_price)}, no wider than ${first.year} in
-relative terms. The gas crisis raised the price level; what changed afterwards
-is the shape of the day.
+Installed solar rose from ${num(first.solar_capacity_gw)} to
+${num(last.solar_capacity_gw)} GW over the sample, and the price solar plants earn
+fell from ${rate(first.solar_capture_rate)} to ${rate(last.solar_capture_rate)} of
+the average price; wind's barely moved. The on-peak block (08:00–20:00 on
+weekdays) went from a EUR ${num(first.spread)}/MWh premium to a
+${num(Math.abs(last.spread))} discount, while the gap between the day's highest
+and lowest hourly price rose from ${pct(first.intraday_spread_pct_of_price)} to
+**${pct(last.intraday_spread_pct_of_price)}** of the average price.
+${crisis.year}, the most expensive year, sits at
+${pct(crisis.intraday_spread_pct_of_price)}: the gas crisis raised the price
+level, and what changed afterwards is the shape.
 
 ```js
 const shapeYears = [first.year, latestFull.year, last.year];
@@ -113,7 +180,7 @@ const shapeRows = shape.filter((d) => shapeYears.includes(d.year));
 Plot.plot({
   title: "Midday fell below the night; the evening became the peak",
   subtitle: "Mean price by market-local clock hour, indexed to each year's average price (100 = baseload).",
-  width, height: 340, marginLeft: 60,
+  width, height: 320, marginLeft: 60,
   x: {label: "hour, market local time", ticks: [0, 4, 8, 12, 16, 20, 23], grid: true},
   y: {label: "% of that year's average price", grid: true},
   color: {legend: true, domain: shapeYears, range: ["#999999", "#E69F00", "#0072B2"]},
@@ -124,120 +191,42 @@ Plot.plot({
 })
 ```
 
-In ${first.year} the day was a plateau. It is now a trough between two peaks:
-midday prices have fallen below night-time prices, and the evening ramp, when
-solar has gone and demand has not, is the most expensive part of the day.
+The day turned from a plateau into a trough between two peaks, and the trough
+arrives at the same hours on every sunny day. That regularity is why a simple
+rule captures so much: ${crisis.year} still paid the most in euros (EUR
+${eur(foresight(crisis.year).eur_per_mw_day)}/MW a day with perfect foresight,
+against ${eur(foresight(last.year).eur_per_mw_day)} in ${last.year}), but its
+spread came from gas and left with it, while today's comes from the solar
+profile, which is still growing.
 
-## 3. What the shape is worth to a battery
+## 4. Beyond the day-ahead hour
 
-The table dispatches a 1 MW / 4 MWh battery against realised prices with perfect
-foresight and one charge–discharge cycle a day, before operating, degradation
-and capital costs. It is the ceiling for day-ahead arbitrage under these
-assumptions, not an achievable margin. GW and GWh are Germany's installed
-battery fleet that year.
+Quarter-hour products, traded since October 2025, raise the day-ahead arbitrage
+ceiling by ${share(quarterUplift(1))} for a 1-hour battery and
+${share(quarterUplift(4))} for a 4-hour one: worth having, but far less than the
+16% by which they widen the daily price range. Balancing capacity has paid more
+than arbitrage. Since November 2020, aFRR up and down averaged EUR
+${eur(stack("all", "afrr").eur_per_mw_day)}/MW a day and FCR
+${eur(stack("all", "fcr").eur_per_mw_day)}, against
+${eur(stack("all", "day_ahead").eur_per_mw_day)} for day-ahead arbitrage with the
+forecast. Those markets are shallow, though: Germany procures about 0.6 GW of FCR
+and 2 GW of aFRR each way, against ${num(fleetGw)} GW of installed batteries. And
+the gap is closing: for a 4-hour battery, arbitrage earned
+${share(closing("2021"))} of the aFRR capacity value in 2021 and
+${share(closing(stackLast))} in ${stackLast}.
 
-```js
-Inputs.table(
-  foresight4.map((d) => ({
-    Year: d.year === last.year ? `${d.year} (partial)` : d.year,
-    "EUR/MW/d": Math.round(d.eur_per_mw_day),
-    GW: d.battery_power_gw,
-    GWh: d.battery_energy_gwh,
-  })),
-  {format: {GW: num, GWh: num}, layout: "auto", rows: 12}
-)
-```
-
-${crisis.year} remains the best year in euros (EUR
-${eur(foresight(crisis.year).eur_per_mw_day)}/MW/day against EUR
-${eur(fleetLast.eur_per_mw_day)} in ${last.year}), because a volatile gas stack
-set the price. ${last.year} reaches
-**${pct((last.intraday_spread / crisis.intraday_spread) * 100)} of ${crisis.year}'s
-absolute daily range at a
-${pct(Math.abs(last.baseload_price / crisis.baseload_price - 1) * 100)} lower
-average price**. The ${crisis.year} spread was tied to gas and faded with it; the
-current one is tied to the solar profile, which is still growing. How long it
-lasts depends mainly on how much flexible capacity is built to trade it.
-
-## 4. Storage competition is not yet visible in margins
-
-Germany's battery fleet grew from ${num(fleetFirst.battery_power_gw)} GW to
-**${num(fleetLast.battery_power_gw)} GW** over the sample, while the
-perfect-foresight margin per MW rose. Pumped hydro, the incumbent competitor for
-the same spread, has stayed near ${num(pumpedLast.value)} GW since
-${pumpedFirst.period}.
-
-```js
-Inputs.table(
-  ["2022", "2023", "2024", "2025", last.year].map((period) => ({
-    Year: period === last.year ? `${period} (partial)` : period,
-    GW: capAt("Battery storage (power)", period).value,
-    GWh: capAt("Battery storage (capacity)", period).value,
-    Hours: fleetHours(period),
-  })),
-  {
-    format: {
-      GW: num,
-      GWh: num,
-      Hours: (v) => v.toFixed(2),
-    },
-    layout: "auto",
-    rows: 6,
-  }
-)
-```
-
-This does not show that competition is absent. The provider reports the battery
-fleet as one aggregate, so residential and grid-scale capacity cannot be
-separated. An average duration of ${fleetHours(last.year).toFixed(2)} hours
-is consistent with a fleet of mostly home systems but does not prove it, and
-annual data cannot separate the fleet's effect from gas prices and weather. The
-indicator to watch is duration: it rose from ${fleetHours("2024").toFixed(2)} to
-${fleetHours(last.year).toFixed(2)} hours since 2024, and grid-scale 2–4 hour
-batteries compete directly for the midday trough.
-
-## 5. A forecast adds a thin margin on top of the shape
-
-```js
-const meta = await FileAttachment("data/forecast.json").json();
-const run = meta.runs.find((d) => d.zone === "DE-LU");
-const scores = [...await FileAttachment("data/forecast_scores.parquet").parquet()];
-const overall = scores.filter((d) => d.scope === "overall");
-const ridgeScore = overall.find((d) => d.model === "ridge");
-const bestBaseline = overall
-  .filter((d) => d.model.startsWith("naive_"))
-  .sort((a, b) => a.mae - b.mae)[0];
-const sens = [...await FileAttachment("data/battery_sensitivities.parquet").parquet()];
-const base4 = sens.find((d) => d.strategy === "ridge" && d.energy_mwh === 4 && d.scenario === "base");
-const sampleYears = base4.days / 365.25;
-```
-
-A per-hour Ridge regression, using only what is known at the 12:00 auction gate
-on the day before delivery, cuts the mean absolute price error by
-**${num(run.best_skill_vs_best_baseline_pct)}%** against the best naive forecast
-(EUR ${num(ridgeScore.mae)} against ${num(bestBaseline.mae)}/MWh).
-
-For the 4-hour battery, that is worth about **EUR
-${eur(base4.incremental_vs_best_naive_eur_mw / sampleYears)}/MW a year** over the
-best simple scheduling rule, or
-${pct((base4.incremental_vs_best_naive_eur_mw / base4.profit_eur) * 100)} of the
-battery's gross margin. The simple rule, which repeats the last similar day,
-earns the rest by following the recurring shape, and Ridge loses to it on
-${base4.underperform_days} of ${base4.days} days. In day-ahead arbitrage the
-shape carries most of the value; forecasting skill pays on atypical days and in
-the price tails.
-
-[Forecast evidence](./forecast) · [Storage value](./battery)
+[Storage value](./battery)
 
 ## Risks to this view
 
 - **Gas prices.** A cheaper marginal unit would lower the evening peak without
   lifting the midday trough.
 - **Grid-scale storage.** Two- to four-hour batteries compete for exactly this
-  spread; fleet duration is the first sign they are arriving.
-- **Market design.** Fifteen-minute day-ahead products since October 2025, and any
-  change to support payments in negative-price hours, change both the trade and
-  its measurement.
+  spread. The fleet's average duration, ${fleetHours(last.year).toFixed(2)} hours in
+  ${last.year}, is the first sign of them arriving; the small balancing markets
+  would fill first.
+- **Market design.** Fifteen-minute products, and any change to support payments
+  in negative-price hours, change both the trade and its measurement.
 - **Evidence.** The results are retrospective, on history inspected during
   development. A prospective pilot has issued forecasts before the gate for
   ${ridgeArm ? ridgeArm.issued : 0} of ${ridgeArm ? ridgeArm.days : 0} delivery
@@ -246,18 +235,21 @@ the price tails.
 
 ## Scope
 
-- **Market:** DE-LU day-ahead auction. Prices are hourly throughout; since
-  October 2025, each hour is the average of four quarter-hour prices.
+- **Markets:** the DE-LU day-ahead auction, with hourly prices except in the
+  quarter-hour study, and German FCR and aFRR capacity auctions. Continuous
+  intraday trading is not modelled, for want of a free public price source; it
+  is the natural next step.
 - **Battery:** 1 MW with 1, 2 or 4 MWh, 90% round-trip efficiency, one
   charge–discharge cycle a day, empty at the start and end of each day. Margins
-  are simulated day-ahead arbitrage under these assumptions: before operating,
-  degradation and capital costs, and without intraday or balancing revenue.
+  are simulated under these assumptions: before operating, degradation and
+  capital costs, and not a revenue estimate for a real asset.
 - **Partial year:** ${last.year} runs to mid-September, so its figures are not
   full-year values. In complete years since 2019, the January–September daily
   range differed from the full-year figure by −4% to +11% (−36% in 2021, when the
   gas spike came in the fourth quarter).
 - **Sources:** Energy-Charts (Fraunhofer ISE, CC BY 4.0), which republishes
-  ENTSO-E and SMARD data. [Definitions and assumptions](./methodology).
+  ENTSO-E and SMARD data, and regelleistung.net, the German TSOs' balancing
+  platform. [Definitions and assumptions](./methodology).
 
 ## About me
 

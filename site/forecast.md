@@ -7,8 +7,9 @@ title: Forecast evidence
 Five models forecast the hourly DE-LU day-ahead price using only what a bidder
 knows when the order book closes at 12:00 on the day before delivery. Per-hour
 Ridge regression is the most accurate overall and holds up best in the tail
-hours that drive storage value. A pooled LightGBM model is close in ordinary
-hours but breaks down in negative-price and scarcity hours.
+hours that drive storage value. The more complex pooled LightGBM model is close
+in ordinary hours but breaks down in negative-price and scarcity hours: model
+complexity did not buy tail performance.
 
 ```js
 const metadata = await FileAttachment("data/forecast.json").json();
@@ -61,6 +62,52 @@ forecast, so a positive bias means the model forecasts too low. Accuracy is not
 money: an error cut in flat hours is worth little to a battery. The
 [storage page](./battery) converts these forecasts into dispatch margin.
 
+<div class="note">
+
+**How the forecast is kept honest.** It uses only data public before 12:00 on
+D-1: lagged prices, the calendar and residual load from two days earlier. Model
+settings are frozen before the test window, and every refit uses only earlier
+days. Published numbers come from a committed, hashed release that
+`gpa export --check` verifies against the site. Live forecasts that miss the
+gate are refused, never backdated, and the arm that needs operator forecasts
+abstains on the record when they are not yet public.
+
+</div>
+
+## Does it pick the right hours?
+
+```js
+const decisions = [...await FileAttachment("data/forecast_decisions.parquet").parquet()];
+const decision = (model) => decisions.find((d) => d.model === model);
+const pickRidge = decision("ridge");
+const pickNaive = decision("naive_similar_day");
+```
+
+```js
+Inputs.table(["ridge", "lightgbm", "naive_similar_day", "naive_previous_day"].map((m) => decision(m)).map((d) => ({
+  Model: label(d.model),
+  "Cheapest hour, ±1h": d.trough_hit_pct,
+  "Dearest hour, ±1h": d.peak_hit_pct,
+  "Spread error (EUR/MWh)": d.spread_mae,
+  "Negative hours caught": d.point_recall_pct,
+  "q10 < 0 flag: caught": d.risk_recall_pct,
+  "q10 < 0 flag: right": d.risk_precision_pct,
+})), {format: {"Cheapest hour, ±1h": percent, "Dearest hour, ±1h": percent, "Spread error (EUR/MWh)": number, "Negative hours caught": percent, "q10 < 0 flag: caught": percent, "q10 < 0 flag: right": percent}, layout: "auto"})
+```
+
+A battery needs the order of the hours more than their level. Ridge places the
+day's cheapest hour within an hour of the realised one on
+**${percent(pickRidge.trough_hit_pct)}** of days and the dearest on
+**${percent(pickRidge.peak_hit_pct)}**, against ${percent(pickNaive.trough_hit_pct)}
+and ${percent(pickNaive.peak_hit_pct)} for the similar-day forecast. It is weak on
+negative prices: its point forecast goes below zero for only
+${percent(pickRidge.point_recall_pct)} of the ${pickRidge.negative_hours.toLocaleString("en")}
+negative hours. Its lower quantile does better as a risk flag, catching
+${percent(pickRidge.risk_recall_pct)} of them at ${percent(pickRidge.risk_precision_pct)}
+precision. Like most regressions it also shrinks extremes: its daily spread is
+${number(-pickRidge.spread_bias)} EUR/MWh narrower than the realised one on
+average.
+
 ## Where the models fail
 
 ```js
@@ -81,7 +128,7 @@ const negative = regime("negative");
 const scarcity = regime("scarcity");
 ```
 
-**In the tails.** In the scarcest 5% of hours, Ridge still beats the best naive
+**Complexity did not buy tail performance.** In the scarcest 5% of hours, Ridge still beats the best naive
 forecast (${percent(scarcity.skill_vs_best_baseline_pct)}) while LightGBM loses
 badly (${percent(regimeOf("scarcity", "lightgbm").skill_vs_best_baseline_pct)}). In
 negative-price hours, both trail the best naive forecast: Ridge narrowly
