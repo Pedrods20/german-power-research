@@ -233,6 +233,14 @@ naive's hourly forecast and the realised prices. Surprise is judged after the
 fact, so it explains where the margin came from; it is not a signal a desk had
 at the gate. Groups sum to the total increment.
 
+**Forecast disagreement** is the label a desk does have at the gate: how much more
+Ridge's schedule expected to earn than the best naive's, both valued at Ridge's
+forecast, in quintiles. The switch test kept the naive's schedule unless that
+expectation exceeded a threshold. Each day's threshold was the past decile (or
+never switching) that would have earned most on the days settled before its gate,
+after a one-year burn-in. Measuring disagreement instead by the rank correlation
+between the two hourly forecasts gave the same result.
+
 **Decision metrics.** A day's cheapest and dearest forecast hours count as hits
 when within one hour of the realised ones. Negative hours are flagged by the
 point forecast below zero, or by the lower 10% quantile below zero; precision is

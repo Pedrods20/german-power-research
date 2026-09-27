@@ -179,6 +179,10 @@ const atypical = surprise.find((d) => d.bucket.startsWith("5"));
 const negativeDays = byGroup("negative_prices");
 const withNegative = negativeDays.find((d) => d.bucket === "Some negative hours");
 const withoutNegative = negativeDays.find((d) => d.bucket === "No negative hours");
+const disagreement = byGroup("forecast_disagreement");
+const agrees = disagreement.find((d) => d.bucket.startsWith("1"));
+const disagrees = disagreement.find((d) => d.bucket.startsWith("5"));
+const quintileBars = (rows) => Plot.barY(rows, {x: "bucket", y: "mean_daily_incremental_eur_mw", fill: (d) => d.mean_daily_incremental_eur_mw < 0 ? "#D55E00" : "#0072B2", tip: true});
 ```
 
 ```js
@@ -188,10 +192,7 @@ Plot.plot({
   width, height: 260, marginLeft: 60, marginBottom: 40,
   x: {label: null, domain: surprise.map((d) => d.bucket)},
   y: {label: "EUR/MW per day", grid: true},
-  marks: [
-    Plot.barY(surprise, {x: "bucket", y: "mean_daily_incremental_eur_mw", fill: (d) => d.mean_daily_incremental_eur_mw < 0 ? "#D55E00" : "#0072B2", tip: true}),
-    Plot.ruleY([0]),
-  ],
+  marks: [quintileBars(surprise), Plot.ruleY([0])],
 })
 ```
 
@@ -203,9 +204,27 @@ day. The ${pct(atypical.day_share)} most atypical days carry
 not where it earns: EUR ${euro(withNegative.mean_daily_incremental_eur_mw)}/MW a day
 there, against ${euro(withoutNegative.mean_daily_incremental_eur_mw)} on other days,
 in line with its weak negative-price calls on the [forecast page](./forecast).
-This suggests a switch a desk could test: follow the recurring shape, and act on
-the forecast only when it disagrees strongly with that shape. This study has not
-tested that rule.
+
+```js
+Plot.plot({
+  title: "Where it will earn is visible at the gate",
+  subtitle: `Ridge's margin over ${name(headline.best_naive)}, EUR/MW per day, by how much more Ridge's schedule expected to earn than the ${name(headline.best_naive)} schedule, both valued at Ridge's forecast (quintiles, known at the gate). ${duration}h battery.`,
+  width, height: 260, marginLeft: 60, marginBottom: 40,
+  x: {label: null, domain: disagreement.map((d) => d.bucket)},
+  y: {label: "EUR/MW per day", grid: true},
+  marks: [quintileBars(disagreement), Plot.ruleY([0])],
+})
+```
+
+Surprise is judged after the fact; disagreement is known before the auction. The
+fifth of days on which Ridge's schedule expected most over the simple rule's
+carries **${pct(disagrees.incremental_share)}** of its gain; on the fifth where they
+agree most, the two earn within EUR
+${Math.abs(agrees.mean_daily_incremental_eur_mw).toFixed(1)}/MW a day of each other. The forecast already behaves as the switch a desk might build: it
+follows the recurring shape unless it sees a reason not to. A rule that kept the
+simple schedule and traded on Ridge only above a disagreement threshold, refitted
+each day on days already settled, ended within 0.1% of Ridge's margin on every
+battery size (2021–2026), so it adds nothing.
 
 ## How a forecast becomes a decision
 

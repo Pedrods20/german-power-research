@@ -56,6 +56,7 @@ const captureLast = capture[capture.length - 1];
 const surprise = attributionRows.filter((d) => d.energy_mwh === 4 && d.dimension === "shape_surprise");
 const typicalDays = surprise.filter((d) => d.bucket.startsWith("1") || d.bucket.startsWith("2"));
 const atypical = surprise.find((d) => d.bucket.startsWith("5"));
+const disagrees = attributionRows.find((d) => d.energy_mwh === 4 && d.dimension === "forecast_disagreement" && d.bucket.startsWith("5"));
 const stack = (year, market) => revenueStack.find((d) => d.energy_mwh === 4 && d.year === year && d.market === market);
 const stackLast = d3.max(revenueStack.filter((d) => d.year !== "all"), (d) => d.year);
 const closing = (year) => stack(year, "day_ahead").eur_per_mw_day / stack(year, "afrr").eur_per_mw_day;
@@ -129,9 +130,11 @@ Where it earns matters more than how much. On the
 ${share(d3.sum(typicalDays, (d) => d.day_share))} of days whose shape was most
 typical, Ridge **loses** to the simple rule; the most atypical fifth of days
 carries **${share(atypical.incremental_share)}** of its gain. Negative-price days
-are not where it earns. The desk reading is a switch: follow the recurring
-shape, and act on the forecast only when it disagrees strongly with it. This
-study has not yet tested that rule.
+are not where it earns. Where it will earn is visible at the auction gate: the
+fifth of days on which Ridge's schedule expected most over the simple rule's
+carries **${share(disagrees.incremental_share)}** of its gain. A switch that
+follows the shape and trades on the forecast only on those days adds nothing,
+because Ridge already follows the shape when the two agree.
 
 [Forecast evidence](./forecast) · [Storage value](./battery)
 

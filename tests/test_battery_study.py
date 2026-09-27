@@ -196,10 +196,29 @@ def _shaped_days(count: int) -> pl.DataFrame:
     return pl.DataFrame(rows)
 
 
+def _schedules(expected: list[float]) -> pl.DataFrame:
+    """One interval a day on which the model's schedule expects ``expected[i]`` over the naive's."""
+    return pl.DataFrame(
+        [
+            {
+                "strategy": strategy,
+                "power_mw": 1.0,
+                "energy_mwh": 4.0,
+                "local_date": DAY + dt.timedelta(days=i),
+                "ts_utc": dt.datetime.combine(DAY + dt.timedelta(days=i), dt.time(), dt.UTC),
+                "action_mwh": 1.0 if strategy == "ridge" else 0.0,
+                "forecast": value,
+            }
+            for i, value in enumerate(expected)
+            for strategy in ("ridge", "naive_previous_day")
+        ]
+    )
+
+
 def test_attribution_splits_the_whole_increment_by_labels_that_ignore_the_model():
     increments = [float(i) for i in range(10)]
     daily = daily_sample([10.0 + x for x in increments], baseline=[10.0] * 10)
-    result = attribution(daily, _shaped_days(10))
+    result = attribution(daily, _shaped_days(10), _schedules(increments))
     for dimension in result.partition_by("dimension"):
         assert dimension["incremental_eur_mw"].sum() == pytest.approx(sum(increments))
         assert dimension["days"].sum() == 10
@@ -214,6 +233,21 @@ def test_attribution_splits_the_whole_increment_by_labels_that_ignore_the_model(
     assert groups[("negative_prices", "Some negative hours")] == pytest.approx(9.0)
     # 10 February 2025 is a Monday, so the sample holds one weekend.
     assert groups[("day_type", "Weekend")] == pytest.approx(5.0 + 6.0)
+
+
+def test_forecast_disagreement_ranks_days_by_what_the_model_expected_at_the_gate():
+    increments = [float(i) for i in range(10)]
+    daily = daily_sample([10.0 + x for x in increments], baseline=[10.0] * 10)
+    # The model expected least on the days it went on to earn most.
+    result = attribution(daily, _shaped_days(10), _schedules([9.0 - x for x in increments]))
+    groups = {
+        row["bucket"]: row["incremental_eur_mw"]
+        for row in result.filter(pl.col("dimension") == "forecast_disagreement").iter_rows(
+            named=True
+        )
+    }
+    assert groups["1 (agrees most)"] == pytest.approx(8.0 + 9.0)
+    assert groups["5 (disagrees most)"] == pytest.approx(0.0 + 1.0)
 
 
 def _quarter_prices(days: int, *, spike: float) -> pl.DataFrame:

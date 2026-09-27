@@ -32,6 +32,7 @@ _QUARTER_SOC_STEP_MWH: Final = 1 / 64
 """On the hourly 0.25 MWh grid a quarter-hour at 1 MW could not move a single step."""
 
 _SURPRISE_LABELS: Final = ["1 (most typical)", "2", "3", "4", "5 (most atypical)"]
+_DISAGREEMENT_LABELS: Final = ["1 (agrees most)", "2", "3", "4", "5 (disagrees most)"]
 _KEYS: Final = ["strategy", "power_mw", "energy_mwh"]
 _TABLES: Final = ("predictions", "dispatch", "summary", "coverage", "daily", "risk", "comparisons")
 _SOURCES: Final = ("battery.py", "battery_study.py")
@@ -310,9 +311,31 @@ def day_types(predictions: pl.DataFrame, naive: str) -> pl.DataFrame:
     )
 
 
+def _disagreement(asset: pl.DataFrame, strategy: str, naive: str) -> pl.DataFrame:
+    """Quintile of what the model's schedule expected over the naive's, at the model's prices.
+
+    Both schedules and the forecast exist at the gate, so a desk could act on this label.
+    """
+    naive_actions = asset.filter(pl.col("strategy") == naive).select("ts_utc", naive="action_mwh")
+    return (
+        asset.filter(pl.col("strategy") == strategy)
+        .join(naive_actions, on="ts_utc")
+        .group_by("local_date")
+        .agg(((pl.col("action_mwh") - pl.col("naive")) * pl.col("forecast")).sum().alias("_gain"))
+        .select(
+            "local_date",
+            pl.col("_gain")
+            .qcut(5, labels=_DISAGREEMENT_LABELS, allow_duplicates=True)
+            .cast(pl.String)
+            .alias("forecast_disagreement"),
+        )
+    )
+
+
 def attribution(
     daily: pl.DataFrame,
     predictions: pl.DataFrame,
+    dispatch: pl.DataFrame,
     *,
     strategy: str = "ridge",
     baselines: Sequence[str] = BASELINES,
@@ -329,12 +352,23 @@ def attribution(
             continue
         model = models[strategy]
         power, energy = float(model["power_mw"][0]), float(model["energy_mwh"][0])
-        days = model.select(
-            "local_date",
-            ((model["profit_eur"] - models[best]["profit_eur"]) / power).alias("incremental"),
-        ).join(day_types(predictions, best), on="local_date", how="left")
+        asset = dispatch.filter((pl.col("power_mw") == power) & (pl.col("energy_mwh") == energy))
+        days = (
+            model.select(
+                "local_date",
+                ((model["profit_eur"] - models[best]["profit_eur"]) / power).alias("incremental"),
+            )
+            .join(day_types(predictions, best), on="local_date", how="left")
+            .join(_disagreement(asset, strategy, best), on="local_date", how="left")
+        )
         total = float(days["incremental"].sum())
-        for dimension in ("negative_prices", "shape_surprise", "day_type", "quarter"):
+        for dimension in (
+            "negative_prices",
+            "shape_surprise",
+            "forecast_disagreement",
+            "day_type",
+            "quarter",
+        ):
             frames.append(
                 days.group_by(pl.col(dimension).alias("bucket"))
                 .agg(

@@ -487,7 +487,7 @@ def _battery_tables(predictions: pl.DataFrame) -> dict[str, pl.DataFrame]:
         base.coverage,
         costs,
         sensitivities,
-        attribution(base.daily, predictions),
+        attribution(base.daily, predictions, base.dispatch),
         revenue_stack(base.daily, base.dispatch, reference.read("balancing_capacity")),
     )
     return {name: _tag(frame) for name, frame in zip(names, frames, strict=True)}
