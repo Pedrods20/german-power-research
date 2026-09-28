@@ -12,13 +12,14 @@
 // Every delivery day an arm was attempted for is counted once, at the best
 // outcome any of its attempts reached. `already_issued` is a backstop run
 // finding the day on record, so it confirms an issue and never counts as one.
+// Only the pilot's arms are counted; the retired `ridge_da` keeps its records.
 
 import {existsSync, readFileSync, readdirSync} from "node:fs";
 import {fileURLToPath} from "node:url";
 
 const root = fileURLToPath(new URL("../../data/forecast_issues/attempts/", import.meta.url));
 const rank = {issued: 5, partial: 4, abstained: 3, late: 2, failed: 1, started: 0};
-const order = ["ridge", "ridge_da", "naive_previous_day", "naive_previous_week", "naive_similar_day"];
+const order = ["ridge", "naive_previous_day", "naive_previous_week", "naive_similar_day"];
 
 const read = (path) => JSON.parse(readFileSync(path, "utf8"));
 const attempts = (existsSync(root) ? readdirSync(root) : [])
@@ -34,7 +35,7 @@ let asOf = null;
 for (const a of attempts) {
   const stamp = a.completed_at ?? a.started_at;
   if (!asOf || stamp > asOf) asOf = stamp;
-  if (!(a.status in rank)) continue;
+  if (!(a.status in rank) || !order.includes(a.model)) continue;
   const perModel = days.get(a.model) ?? new Map();
   const best = perModel.get(a.delivery_date);
   if (best === undefined || rank[a.status] > rank[best]) perModel.set(a.delivery_date, a.status);
@@ -42,7 +43,7 @@ for (const a of attempts) {
 }
 
 const arms = [...days.keys()]
-  .sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99) || a.localeCompare(b))
+  .sort((a, b) => order.indexOf(a) - order.indexOf(b))
   .map((model) => {
     const outcomes = [...days.get(model).values()];
     const count = (status) => outcomes.filter((s) => s === status).length;

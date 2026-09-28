@@ -1,13 +1,7 @@
-"""Day-ahead fundamentals: fetch, store round-trip, and the panel wiring.
+"""Day-ahead fundamentals: fetch, hourly aggregation and the ablation's panel wiring.
 
-These cover the new pieces connecting real data to the previously-unused
-``gpa.forecast.fundamentals`` architecture: combining onshore/offshore wind at
-fetch time, the store round-trip through the new ``fundamentals`` dataset, and
-the hourly aggregation and research-policy vintage
-:func:`gpa.forecast.fundamentals.from_store` applies for a historical backfill.
-
-The historical forecast backfill contains quarter-hourly values, so the
-fixtures below exercise that spacing as well as hourly provider responses.
+The historical archive holds quarter-hourly values, so the fixtures exercise that
+spacing as well as hourly provider responses.
 """
 
 from __future__ import annotations
@@ -130,24 +124,18 @@ def _write_fundamentals(monkeypatch, start: dt.datetime, hours: int) -> None:
 
 def test_from_store_averages_quarter_hours_into_one_hourly_value(tmp_path, monkeypatch):
     monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
-    # 2024-12-31 23:00 UTC = 2025-01-01 00:00 Berlin (CET, UTC+1 in January):
-    # one full local delivery day, so every row shares one gate.
+    # 2024-12-31 23:00 UTC = 2025-01-01 00:00 Berlin: one full local delivery day.
     start = dt.datetime(2024, 12, 31, 23, tzinfo=dt.UTC)
     _write_fundamentals(monkeypatch, start, hours=24)
 
     wide = fundamentals.from_store(ZONE)
 
     assert wide.height == 24  # one row per clock hour, not per quarter-hour
-    first_hour = wide.sort("ts_utc").row(0, named=True)
+    first_hour = wide.sort("local_date", "local_hour").row(0, named=True)
     # Quarter-hour load values for the first hour are 100, 101, 102, 103.
-    assert first_hour["load_forecast_mw"] == pytest.approx(101.5)
-    assert first_hour["wind_forecast_mw"] == pytest.approx(15.0)
-    assert first_hour["solar_forecast_mw"] == pytest.approx(0.0)
-    # The historical-backfill policy: every row is assigned the market gate of
-    # its own delivery day (noon Berlin time on D-1), not an observed
-    # publication instant.
-    assert wide["published_at"].n_unique() == 1
-    assert wide["published_at"][0] == dt.datetime(2024, 12, 31, 11, tzinfo=dt.UTC)
+    assert first_hour["load"] == pytest.approx(101.5)
+    assert first_hour["wind"] == pytest.approx(15.0)
+    assert first_hour["solar"] == pytest.approx(0.0)
 
 
 def test_from_store_drops_a_partial_hour_rather_than_averaging_it(tmp_path, monkeypatch):
@@ -173,63 +161,43 @@ def test_from_store_is_empty_when_nothing_backfilled(tmp_path, monkeypatch):
     assert fundamentals.from_store(ZONE).is_empty()
 
 
-# --- the prospective vintage -------------------------------------------------
-#
-# 2024-12-31 23:00 UTC starts one full Berlin delivery day (2025-01-01), whose
-# gate is noon Berlin on D-1, i.e. 2024-12-31 11:00 UTC in January.
-
-_GATE = dt.datetime(2024, 12, 31, 11, tzinfo=dt.UTC)
-_DAY_START = dt.datetime(2024, 12, 31, 23, tzinfo=dt.UTC)
-
-
-def _first_hour_panel() -> pl.DataFrame:
-    return pl.DataFrame(
-        {"local_date": [dt.date(2025, 1, 1)], "local_hour": [0]},
-        schema={"local_date": pl.Date, "local_hour": pl.Int8},
-    )
-
-
-def test_an_observed_vintage_makes_the_forecast_age_real_rather_than_zero(tmp_path, monkeypatch):
+def test_the_repeated_autumn_hour_averages_both_intervals_as_the_price_target_does(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
-    _write_fundamentals(monkeypatch, _DAY_START, hours=24)
-    panel = _first_hour_panel()
-
-    policy = fundamentals.attach(panel, fundamentals.from_store(ZONE), ZONE)
-    observed = fundamentals.attach(
-        panel,
-        fundamentals.from_store_prospective(
-            ZONE, delivery_date=dt.date(2025, 1, 1), retrieved_at=_GATE - dt.timedelta(hours=6)
-        ),
-        ZONE,
-    )
-
-    # The constant zero is exactly why the backfilled features are published
-    # only as a labelled ablation; a real run has a real, varying age.
-    assert policy["da_forecast_age_hours"][0] == 0
-    assert observed["da_forecast_age_hours"][0] == 6
-
-
-def test_the_repeated_autumn_hour_averages_both_intervals_as_the_price_target_does():
     # 02:00 on 26 October 2025 happens twice in Berlin: 00:00 and 01:00 UTC.
-    snapshot = pl.DataFrame(
-        {
-            "zone": ["DE-LU", "DE-LU"],
-            "ts_utc": [dt.datetime(2025, 10, 26, hour, tzinfo=dt.UTC) for hour in (0, 1)],
-            "published_at": [dt.datetime(2025, 10, 25, 10, tzinfo=dt.UTC)] * 2,
-            "load_forecast_mw": [40_000.0, 42_000.0],
-            "wind_forecast_mw": [10_000.0, 14_000.0],
-            "solar_forecast_mw": [0.0, 0.0],
-        }
+    hours = [dt.datetime(2025, 10, 26, hour, tzinfo=dt.UTC) for hour in (0, 1)]
+    values = {"load": [40_000.0, 42_000.0], "wind": [10_000.0, 14_000.0], "solar": [0.0, 0.0]}
+    store.write(
+        pl.DataFrame(
+            {
+                "zone": ZONE.code,
+                "ts_utc": hours * len(values),
+                "resolution_min": 60,
+                "series": [name for name in values for _ in hours],
+                "forecast_mw": [v for series in values.values() for v in series],
+                "source": "test",
+            },
+            schema={
+                "zone": pl.String,
+                "ts_utc": pl.Datetime("us", "UTC"),
+                "resolution_min": pl.Int16,
+                "series": pl.String,
+                "forecast_mw": pl.Float64,
+                "source": pl.String,
+            },
+        ),
+        "fundamentals",
     )
     panel = pl.DataFrame(
         {"local_date": [dt.date(2025, 10, 26)], "local_hour": [2]},
         schema={"local_date": pl.Date, "local_hour": pl.Int8},
     )
 
-    for rows in (snapshot, snapshot.reverse()):
-        attached = fundamentals.attach(panel, rows, ZONE)
-        assert attached["da_load_forecast"].to_list() == [41_000.0]
-        assert attached["da_residual_load_forecast"].to_list() == [29_000.0]
+    attached = fundamentals.attach(panel, fundamentals.from_store(ZONE))
+
+    assert attached["da_load_forecast"].to_list() == [41_000.0]
+    assert attached["da_residual_load_forecast"].to_list() == [29_000.0]
 
 
 def test_load_panel_include_fundamentals_adds_the_feature_columns(tmp_path, monkeypatch):
@@ -272,101 +240,3 @@ def test_load_panel_include_fundamentals_adds_the_feature_columns(tmp_path, monk
     assert row["da_load_forecast"] == pytest.approx(101.5)  # mean of 100, 101, 102, 103
     assert row["da_wind_forecast"] == pytest.approx(15.0)
     assert row["da_residual_load_forecast"] == pytest.approx(101.5 - 15.0 - 0.0)
-    assert row["da_forecast_age_hours"] is not None
-
-
-# --- the mixed vintage a live issue can actually train on ---------------------
-#
-# 2025-01-05 is the delivery day; 2025-01-01 onwards is its training history.
-# The gate for 2025-01-05 is noon Berlin on 2025-01-04, i.e. 11:00 UTC.
-
-_DELIVERY = dt.date(2025, 1, 5)
-_DELIVERY_GATE = dt.datetime(2025, 1, 4, 11, tzinfo=dt.UTC)
-_RETRIEVED = _DELIVERY_GATE - dt.timedelta(hours=6)
-
-
-def _multi_day_panel() -> pl.DataFrame:
-    """Hour zero of five consecutive delivery days: four of history, one target."""
-    return pl.DataFrame(
-        {
-            "local_date": [dt.date(2025, 1, day) for day in range(1, 6)],
-            "local_hour": [0] * 5,
-        },
-        schema={"local_date": pl.Date, "local_hour": pl.Int8},
-    )
-
-
-def _write_five_days(monkeypatch) -> None:
-    _write_fundamentals(monkeypatch, _DAY_START, hours=24 * 5)
-
-
-def test_the_prospective_vintage_keeps_the_history_the_model_has_to_fit(tmp_path, monkeypatch):
-    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
-    _write_five_days(monkeypatch)
-
-    attached = fundamentals.attach(
-        _multi_day_panel(),
-        fundamentals.from_store_prospective(ZONE, delivery_date=_DELIVERY, retrieved_at=_RETRIEVED),
-        ZONE,
-    )
-
-    assert attached["da_load_forecast"].null_count() == 0
-    # Only the delivery day's vintage is a claim about what the issue knew, and
-    # only there is it observed. History keeps the research-policy gate, which
-    # is what makes its age identically zero.
-    history = attached.filter(pl.col("local_date") < _DELIVERY)
-    delivery = attached.filter(pl.col("local_date") == _DELIVERY)
-    assert history["da_forecast_age_hours"].unique().to_list() == [0]
-    assert delivery["da_forecast_age_hours"].to_list() == [6]
-
-
-def test_the_prospective_vintage_still_refuses_a_delivery_day_read_after_the_gate(
-    tmp_path, monkeypatch
-):
-    """A late retrieval costs the delivery day, never the training history."""
-    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
-    _write_five_days(monkeypatch)
-
-    attached = fundamentals.attach(
-        _multi_day_panel(),
-        fundamentals.from_store_prospective(
-            ZONE,
-            delivery_date=_DELIVERY,
-            retrieved_at=_DELIVERY_GATE + dt.timedelta(hours=1),
-        ),
-        ZONE,
-    )
-
-    assert attached.filter(pl.col("local_date") == _DELIVERY)["da_load_forecast"][0] is None
-    assert attached.filter(pl.col("local_date") < _DELIVERY)["da_load_forecast"].null_count() == 0
-
-
-def test_from_store_prospective_rejects_a_naive_instant(tmp_path, monkeypatch):
-    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
-    with pytest.raises(ValueError, match="timezone-aware"):
-        fundamentals.from_store_prospective(
-            ZONE, delivery_date=_DELIVERY, retrieved_at=dt.datetime(2025, 1, 4, 5)
-        )
-
-
-def test_from_store_prospective_is_empty_when_nothing_backfilled(tmp_path, monkeypatch):
-    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
-    assert fundamentals.from_store_prospective(
-        ZONE, delivery_date=_DELIVERY, retrieved_at=_RETRIEVED
-    ).is_empty()
-
-
-def test_the_forecast_age_is_recorded_on_the_panel_but_never_fitted(tmp_path, monkeypatch):
-    """It is constant wherever the vintage is the gate, so it can only mislead."""
-    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
-    _write_five_days(monkeypatch)
-
-    attached = fundamentals.attach(
-        _multi_day_panel(),
-        fundamentals.from_store_prospective(ZONE, delivery_date=_DELIVERY, retrieved_at=_RETRIEVED),
-        ZONE,
-    )
-
-    assert "da_forecast_age_hours" in attached.columns
-    assert "da_forecast_age_hours" in fundamentals.FUNDAMENTAL_COLUMNS
-    assert "da_forecast_age_hours" not in FUNDAMENTAL_FEATURES

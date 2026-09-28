@@ -192,8 +192,7 @@ def build_panel(
     """Assemble the target and its lawful features.
 
     ``delivery_date`` adds that day's hours as keys with a null target, for a live issue.
-    Fundamentals are optional wide snapshots; only the latest published before each
-    row's own gate is used.
+    Fundamentals, when given, are the ablation's operator forecasts.
     """
     for frame in (prices, load, generation, fundamentals):
         if frame is not None and not frame.is_empty():
@@ -255,7 +254,7 @@ def build_panel(
             panel, added = _attach_residual_features(panel, residual, zone)
             features.extend(added)
     if fundamentals is not None:
-        panel = attach_fundamentals(panel, fundamentals, zone)
+        panel = attach_fundamentals(panel, fundamentals)
         features.extend(FUNDAMENTAL_FEATURES)
     panel = _attach_calendar(panel).with_columns(
         pl.when(pl.col("dow").is_in(list(_SIMILAR_DAY_USES_YESTERDAY)))

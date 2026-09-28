@@ -227,12 +227,13 @@ ridgeBase && ridgeAbl && lightgbmBase && lightgbmAbl
   : html`<p class="note">Ablation not yet run locally: <code>gpa fundamentals-ablation</code>.</p>`
 ```
 
-They help, but they are left out of the published model. The archive does not
-record when each forecast became public, and EU rules only require wind and
-solar forecasts by 18:00 Brussels time on D-1, six hours after the gate. From
-this public source, the gain is therefore an upper bound; a desk would use
-commercial forecasts available before the auction. An hourly probe is measuring
-when the public forecasts actually appear.
+They help, but this source cannot supply them in time. EU rules only require
+wind and solar forecasts by 18:00 Brussels time on D-1, six hours after the
+gate, and a probe of Energy-Charts found neither at checks two to nearly five
+hours after the gate on each of the five delivery days it covered (25 to 29
+September 2026). The gain is therefore an upper bound: it credits the model with
+forecasts this public source only has hours after the auction. A desk closes
+that gap with commercial forecasts issued before the gate.
 
 <details>
 <summary>Design: target, inputs and test protocol</summary>
@@ -332,9 +333,9 @@ Plot.plot({
 Since 23 September 2026, a scheduled job issues Ridge and the three naive
 forecasts before each gate and stores the inputs each forecast used. Runs that
 arrive after the gate are refused rather than backdated. A second Ridge arm with
-the operator forecasts, `ridge_da`, abstains whenever they are not yet published
-at the gate. Each delivery day counts once, at the best outcome any attempt
-reached:
+the operator forecasts, `ridge_da`, found nothing to read in 11 pre-gate runs
+across six delivery days and was retired on 28 September, for the reason above.
+Each delivery day counts once, at the best outcome any attempt reached:
 
 ```js
 const ledgerStatus = await FileAttachment("data/ledger_status.json").json();

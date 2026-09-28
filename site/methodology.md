@@ -17,7 +17,7 @@ benchmark and a multi-year storage valuation need.
 | Data | Provider | Committed coverage | Use |
 |---|---|---|---|
 | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | From 2018-12-31, 94 monthly partitions | The market study, the forecast and the battery valuation |
-| Day-ahead load/wind/solar forecasts | [Energy-Charts](https://www.energy-charts.info/) | From 2019-01-05 | Labelled ablation and the prospective `ridge_da` arm |
+| Day-ahead load/wind/solar forecasts | [Energy-Charts](https://www.energy-charts.info/) | From 2019-01-05 | Labelled ablation, an upper bound |
 | FCR and aFRR capacity auction results | [regelleistung.net](https://www.regelleistung.net/) | From 2020-11-03, the first day both clear daily in four-hour blocks | The revenue-stack comparison on the storage page |
 
 The store refreshes monthly; the prospective ledger runs daily and separately.
@@ -72,9 +72,8 @@ Institute for Solar Energy Systems ISE under CC BY 4.0. It republishes ENTSO-E
 and SMARD figures through an open API, so the underlying numbers are the ones
 the system operators publish. Four endpoints are used —
 `/price` for day-ahead prices, `/public_power` for load and generation by fuel,
-`/public_power_forecast` for the day-ahead fundamentals, which feed the labelled
-ablation below and the prospective `ridge_da` arm but never the published
-retrospective baseline, and `/installed_power` for installed capacity by technology
+`/public_power_forecast` for the day-ahead fundamentals, which feed only the
+labelled ablation below, and `/installed_power` for installed capacity by technology
 together with the government's own 2030 targets. Two provider behaviours are
 handled explicitly rather than assumed: the `end` parameter is inclusive, and
 the German series changed resolution without notice, so interval length is
@@ -132,30 +131,23 @@ year and hour so aggregate skill cannot hide a weak operating regime.
 
 Day-ahead load/wind/solar forecasts (Energy-Charts) are backfilled from
 2019-01-05 for DE-LU, but are not part of the published information set above.
-The provider exposes no publication timestamp for the historical archive, so
-every backfilled row is assigned the D-1 noon market gate as a research-policy
-vintage rather than an observed retrieval instant. An ablation adding these
-features is shown as a labelled diagnostic on the
-[Forecasting page](./forecast), not folded into the published baseline:
-adopting it as a new frozen release is a separate decision this project has
-not made, and the assigned vintage is precisely why it cannot be made from the
-archive alone.
+The provider exposes no publication timestamp, so every backfilled row is
+treated as public at its own D-1 noon gate. An ablation adding these features
+is shown as a labelled diagnostic on the [Forecasting page](./forecast), not
+folded into the published baseline.
 
-The prospective path records the instant it actually retrieved the delivery
-day's forecasts. Each run issues two frozen identities, `ridge` on the
-information set above and `ridge_da` on that set plus these features, and
-`ridge_da` abstains on the record when the provider has not published the
-delivery day before the gate. Its training history still carries the assigned
-D-1 vintage, because the archive holds no observed instant; the assumption
-shapes how that arm is fitted, never what its issued forecast knew.
-
-Publication timing may be the binding constraint. Commission Regulation (EU)
+That noon vintage is optimistic, and measurably so. Commission Regulation (EU)
 543/2013 requires day-ahead wind and solar forecasts by **18:00 Brussels time on
 D-1**, six hours after the gate (Article 14(1)(d)); only the load forecast is due
-before it (Article 6(1)(b)). If the public series routinely appears after noon,
-the assigned noon vintage is optimistic and the ablation's gain is an upper
-bound. `gpa probe-fundamentals` runs hourly and logs how much of the next
-delivery day the provider serves at each check.
+before it (Article 6(1)(b)). A scheduled probe logged how much of the next
+delivery day Energy-Charts served, every three to five hours from 23 to 28
+September 2026. On each of the five delivery days it covered, wind and solar
+were still missing at a check made between 2 h 10 min and 4 h 44 min after the
+gate. The load forecast appeared between a check before the gate and one after
+it, so its side of the gate is unresolved. The ablation's gain is therefore an
+upper bound for a forecast read from this source. A prospective Ridge arm with
+these features, `ridge_da`, found nothing to read in any of its 11 pre-gate runs
+and was retired with the probe on 28 September 2026.
 
 See the complete result on the [Forecasting page](./forecast).
 
@@ -278,7 +270,7 @@ reason each one was chosen and what it costs the result.
 | Forecast gate | 12:00 market time on D-1 | The day-ahead auction's order book closes at midday for next-day delivery, so this is the last instant a bidder's information set is fixed | A later gate would report hindsight as skill |
 | Target resolution | Local clock-hour, duration-weighted | Day-ahead coupling moved to 15-minute market time units for delivery from 1 October 2025; the hourly figure is an analytical aggregate from then on | The benchmark does not price a traded quarter-hour product |
 | Information set | Lagged prices, calendar features, residual load lagged ≥ 2 delivery days | Stored revisions cannot certify publication-time vintages, so realised delivery-day fundamentals are excluded | Reported skill is lower than a fundamentals-driven model would show; the ablation quantifies the gap |
-| Fundamentals vintage | Backfilled day-ahead forecasts carry an assigned D-1 noon vintage; a prospective issue records the instant it actually read the delivery day's snapshot | The historical archive exposes no publication timestamp, while a live run can observe its own for the day it is forecasting | Retrospectively those features inform only the labelled ablation, never the published baseline; prospectively they define a separate `ridge_da` arm whose training history still carries the assigned vintage, so the assumption reaches the fit and not the issued information set. EU rules only require wind and solar forecasts by 18:00 on D-1, after the gate: if the public series appears after noon, the ablation's gain is an upper bound and `ridge_da` cannot issue, which the hourly probe is measuring |
+| Fundamentals vintage | Backfilled day-ahead forecasts are treated as public at their D-1 noon gate | The archive exposes no publication timestamp | Optimistic: the probe found wind and solar still missing two to nearly five hours after the gate on every day it covered, so the ablation's gain is an upper bound and the features stay out of the published baseline |
 | Walk-forward protocol | Expanding window, refit with dates strictly before each forecast day | Mirrors how a model would actually be maintained in production | A fixed split would hide regime-dependent decay |
 | Hyperparameter selection | Frozen on a validation window preceding the test period | Selection inside the evaluation window reports a tuned fit as out-of-sample | Published scores would be optimistically biased |
 | Evaluation stance | Retrospective development benchmark on already-inspected history | Honest label for a sample that has been examined during development | Not an untouched holdout; a prospective ledger is still required |
@@ -320,8 +312,8 @@ npm run build
 The prospective ledger lives under `data/forecast_issues/` and grows by a bot
 commit on every scheduled run; `gpa forecast-attempt report --start-date ...
 --end-date ...` gives the verified daily denominator the ledger counter on the
-forecast page summarises. The publication-time probe's log lives on the
-repository's separate `probe-log` branch.
+forecast page summarises. The retired publication-time probe's log is kept on
+the repository's separate `probe-log` branch.
 
 The [source repository](https://github.com/Pedrods20/german-power-research) contains
 the validated monthly Parquet store, forecast code, battery optimizer and test
@@ -372,15 +364,11 @@ calibration for this project's own figures:
 The forecast is retrospective until a separately recorded six-week prospective
 period is complete, and even then that period tests the process, not the value
 across seasons. The published information set uses lagged
-realised fundamentals, not operator forecasts: day-ahead load/wind/solar
-forecasts are backfilled but carry an assigned, not observed, publication
-vintage, so they inform only the labelled ablation on the Forecasting page,
-not the published baseline. Whether they earn a place in the information set is
-left to the prospective ledger, which issues them as a separate `ridge_da` arm
-beside the published one and observes the delivery day's vintage rather than
-assuming it. Its first run found nothing to read before the gate, and EU
-publication rules allow that to be the norm, so the question is open and now
-starts with when the provider publishes, not with the model.
+realised fundamentals, not operator forecasts: the public day-ahead wind and
+solar forecasts arrive after the gate, so they inform only the labelled
+ablation on the Forecasting page, as an upper bound. A desk's information set
+would add commercial forecasts issued before the auction, for which there is no
+public, credential-free source.
 Continuous intraday trading is not modelled, for want of a free public price
 source, and balancing is compared on capacity revenue only. The study is zonal,
 not nodal; congestion, basis and transmission constraints are outside scope.

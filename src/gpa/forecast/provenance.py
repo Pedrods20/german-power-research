@@ -28,20 +28,13 @@ from gpa.store import atomic_write
 from gpa.zones import get_zone
 
 MIN_TRAIN_ROWS = 270
-
-FUNDAMENTALS_SUFFIX = "_da"
-"""Marks the arm with fundamentals: two information sets must never share a ledger key."""
-
-
-def uses_fundamentals(name: str) -> bool:
-    """Whether this model identity fits day-ahead operator forecasts."""
-    return name.endswith(FUNDAMENTALS_SUFFIX)
+ISSUE_SOURCES = ("price", "load", "generation")
+"""The datasets an issue reads and archives: the published information set, nothing more."""
 
 
 def policy_id(name: str) -> str:
-    """The frozen issuance policy, recorded on every issue so the arms read apart."""
-    information_set = "da-fundamentals" if uses_fundamentals(name) else "published-set"
-    return f"de-lu-development-v1-{name}-train{MIN_TRAIN_ROWS}-{information_set}"
+    """The frozen issuance policy, recorded on every issue."""
+    return f"de-lu-development-v1-{name}-train{MIN_TRAIN_ROWS}-published-set"
 
 
 _BASE = Path(__file__).resolve().parent
@@ -65,18 +58,9 @@ def digest(value: Any) -> str:
 
 
 def default_model(name: str) -> Model:
-    """Frozen configurations; ``ridge`` and ``ridge_da`` differ only in their inputs."""
+    """Frozen configurations of the models an issue may declare."""
     if name == "ridge":
         return Ridge(alpha=0.1)
-    if name == "ridge_da":
-        return Ridge(
-            alpha=0.1,
-            name="ridge_da",
-            description=(
-                "Per-hour ridge on the published set plus day-ahead operator "
-                "forecasts of load, wind and solar."
-            ),
-        )
     if name == "lightgbm":
         return LightGBM()
     columns = {
@@ -86,7 +70,7 @@ def default_model(name: str) -> Model:
     }
     if name in columns:
         return Naive(name, columns[name], "Fixed lagged-price comparator.")
-    raise ValueError("model must be ridge, ridge_da, lightgbm or an existing naive comparator")
+    raise ValueError("model must be ridge, lightgbm or an existing naive comparator")
 
 
 def describe(model: Model) -> dict[str, Any]:
@@ -218,12 +202,7 @@ def save_snapshot(
     from gpa.forecast.ledger import timing_reason
 
     sources, observations = source_frames or {}, observed_at or {}
-    if set(sources) != set(observations) or set(sources) - {
-        "price",
-        "load",
-        "generation",
-        "fundamentals",
-    }:
+    if set(sources) != set(observations) or set(sources) - set(ISSUE_SOURCES):
         raise ValueError("source frames require matching local observation timestamps")
     issued_at = frame["issued_at"][0]
     if any(utc(stamp) > frame["input_as_of"][0] for stamp in observations.values()):

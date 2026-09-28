@@ -26,14 +26,6 @@ on:
     # that finds nothing still fails, so a red run means a missing day, not a
     # redundant one. An abstained or partial issue is not canonical, so a later
     # pre-gate slot retries it.
-    #
-    # `ridge` issues from the published information set and `ridge_da` from
-    # that set plus the operators' day-ahead forecasts: separate frozen
-    # identities, scored against each other. Whether `ridge_da` can ever issue
-    # is an open question. It found nothing to read at 05:45 CEST on 16
-    # September and at 09:49 CEST on 23 September, and Regulation (EU)
-    # 543/2013 only requires day-ahead wind and solar forecasts by 18:00 on
-    # D-1, after the gate. probe.yml measures when the series actually appears.
     - cron: "17 23 * * *"
     - cron: "17 2 * * *"
     - cron: "47 6 * * *"
@@ -59,10 +51,6 @@ jobs:
       # The published information set, and the arm the retrospective release
       # already describes. It must always issue; the job fails if it does not.
       FORECAST_MODEL: ridge
-      # The same estimator on a wider information set, run beside it as the
-      # experiment that settles whether the fundamentals earn a place. It may
-      # abstain without failing the run: see the issue step below.
-      FORECAST_MODEL_DA: ridge_da
       # The comparators the forecast's value is claimed over. Issued at the same
       # gate on the same inputs, so the prospective record can score the claim
       # the retrospective release makes instead of reconstructing them later.
@@ -84,19 +72,16 @@ jobs:
       - name: Register this run as a tracked attempt before any refresh
         # A setup or ingestion failure below must still leave local evidence
         # that this scheduled slot was attempted, not silently absent. One
-        # attempt per arm: they finish independently, so an abstaining
-        # fundamentals arm never closes the published arm's record.
+        # attempt per arm, so each finishes on its own record.
         run: |
           ATTEMPT_ID="gh-${{ github.run_id }}-${{ github.run_attempt }}"
-          ATTEMPT_ID_DA="$ATTEMPT_ID-da"
           echo "ATTEMPT_ID=$ATTEMPT_ID" >> "$GITHUB_ENV"
-          echo "ATTEMPT_ID_DA=$ATTEMPT_ID_DA" >> "$GITHUB_ENV"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             ORIGIN=workflow_dispatch
           else
             ORIGIN=schedule
           fi
-          pairs="$ATTEMPT_ID:$FORECAST_MODEL $ATTEMPT_ID_DA:$FORECAST_MODEL_DA"
+          pairs="$ATTEMPT_ID:$FORECAST_MODEL"
           for model in $FORECAST_COMPARATORS; do
             pairs="$pairs $ATTEMPT_ID-$model:$model"
           done
@@ -120,7 +105,10 @@ jobs:
       - name: Refresh the DE-LU forecast inputs
         # Prices are requested past now: D-1's whole curve is public before
         # this morning run, and the panel drops an incomplete D-1 entirely.
-        run: gpa ingest --zone DE-LU --days "$FORECAST_LOOKBACK"
+        # Only the series an issue reads, so no other endpoint can fail the run.
+        run: >-
+          gpa ingest --zone DE-LU --days "$FORECAST_LOOKBACK"
+          --dataset price --dataset load --dataset generation
 
       - name: Validate the isolated inputs
         run: gpa validate
@@ -137,22 +125,9 @@ jobs:
         # tracked attempt instead of leaving it open.
         run: gpa issue --zone DE-LU --model "$FORECAST_MODEL" --attempt-id "$ATTEMPT_ID"
 
-      - name: Issue the day-ahead fundamentals arm beside it
-        # `gpa issue` exits non-zero on anything but a complete issue, and this
-        # arm abstains by design whenever the provider has not published the
-        # delivery day in time. That abstention is the experiment's evidence,
-        # not a fault: the commit step below records it either way and the
-        # attempt carries its status. Failing the job on it would make an honest
-        # abstention indistinguishable from a broken run, and would hide it
-        # behind a red cross on days the published arm succeeded. The published
-        # arm above is the one that gates this job.
-        continue-on-error: true
-        run: gpa issue --zone DE-LU --model "$FORECAST_MODEL_DA" --attempt-id "$ATTEMPT_ID_DA"
-
       - name: Issue the naive comparators on the same inputs
-        # After the fundamentals arm, so a comparator failure never costs that
-        # arm its attempt. Like the published arm, these must issue: without
-        # them the prospective record cannot test the value claimed for it.
+        # Like the published arm, these must issue: without them the
+        # prospective record cannot test the value claimed for it.
         run: |
           for model in $FORECAST_COMPARATORS; do
             gpa issue --zone DE-LU --model "$model" --attempt-id "$ATTEMPT_ID-$model"
@@ -168,7 +143,7 @@ jobs:
           if [ -z "$ATTEMPT_ID" ]; then
             exit 0
           fi
-          ids="$ATTEMPT_ID $ATTEMPT_ID_DA"
+          ids="$ATTEMPT_ID"
           for model in $FORECAST_COMPARATORS; do
             ids="$ids $ATTEMPT_ID-$model"
           done

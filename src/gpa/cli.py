@@ -174,36 +174,6 @@ def balancing(
         raise typer.Exit(1)
 
 
-@app.command("probe-fundamentals")
-def probe_fundamentals(
-    zone: ZoneOption = "DE-LU",
-    output: Annotated[Path, typer.Option(help="CSV log the check is appended to.")] = Path(
-        "data/probes/fundamentals_publication.csv"
-    ),
-    verbose: VerboseOption = False,
-) -> None:
-    """Log how much of tomorrow's day-ahead forecasts the provider already serves."""
-    _configure_logging(verbose)
-    from gpa import probe
-    from gpa.sources import get_source
-
-    market = get_zone(zone)
-    source = get_source(market.sources["fundamentals"])
-    frame = probe.check(market, now=pipeline.now_utc(), fetch=source.fetch)
-    probe.append(frame, output)
-    row = frame.row(0, named=True)
-    covered = ", ".join(
-        f"{r['series']} {r['hours_covered']}/{r['hours_expected']}"
-        for r in frame.iter_rows(named=True)
-    )
-    margin = row["minutes_before_gate"]
-    relative = f"{margin} min before" if margin >= 0 else f"{-margin} min after"
-    typer.echo(
-        f"{market.code} {row['delivery_date']} at {row['checked_at_utc']} "
-        f"({relative} the gate): {covered} -> {output}"
-    )
-
-
 @app.command()
 def validate(verbose: VerboseOption = False) -> None:
     """Re-check every stored partition against its schema contract."""
@@ -438,10 +408,7 @@ def issue(
     delivery_date: Annotated[
         str | None, typer.Option(help="Delivery YYYY-MM-DD. Default: tomorrow in market time.")
     ] = None,
-    model: Annotated[
-        str,
-        typer.Option(help="ridge, ridge_da (adds day-ahead fundamentals), lightgbm or a naive."),
-    ] = "ridge",
+    model: Annotated[str, typer.Option(help="ridge, lightgbm or a naive comparator.")] = "ridge",
     allow_late: Annotated[
         bool, typer.Option(help="Allow a late issue for diagnostics; labelled in the ledger.")
     ] = False,
@@ -451,12 +418,8 @@ def issue(
         typer.Option(help="Reuse a workflow start event; otherwise create a manual attempt."),
     ] = None,
 ) -> None:
-    """Issue one delivery day before the gate and keep its immutable evidence.
-
-    The model fixes the information set: ``ridge_da`` always reads the operators'
-    day-ahead forecasts and abstains on the record when they are not yet published.
-    """
-    from gpa.forecast import attempts, fundamentals, ledger, provenance
+    """Issue one delivery day before the gate and keep its immutable evidence."""
+    from gpa.forecast import attempts, ledger, provenance
     from gpa.forecast.panel import build_panel
 
     market = get_zone(zone)
@@ -507,24 +470,16 @@ def issue(
                 return
         sources: dict[str, pl.DataFrame] = {}
         observations: dict[str, dt.datetime] = {}
-        for dataset in store.DATASETS:
+        for dataset in provenance.ISSUE_SOURCES:
             if market.has(dataset):
                 sources[dataset] = store.read(dataset, market.code)
                 observations[dataset] = ledger.now_utc()
-        snapshots = (
-            fundamentals.from_store_prospective(
-                market, delivery_date=target_date, retrieved_at=observations["fundamentals"]
-            )
-            if provenance.uses_fundamentals(model)
-            else None
-        )
         as_of = ledger.now_utc()
         prepared = build_panel(
             sources["price"],
             market,
             load=sources.get("load"),
             generation=sources.get("generation"),
-            fundamentals=snapshots,
             delivery_date=target_date,
         )
         frame = ledger.record_issue(

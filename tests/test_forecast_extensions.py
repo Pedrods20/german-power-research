@@ -1,4 +1,4 @@
-"""Tests for prospective issuance, fundamentals and the upgraded challenger."""
+"""Tests for prospective issuance and the upgraded challenger."""
 
 from __future__ import annotations
 
@@ -8,37 +8,10 @@ from zoneinfo import ZoneInfo
 import polars as pl
 
 from gpa import battery
-from gpa.forecast import fundamentals, ledger, panel, scoring
+from gpa.forecast import ledger, panel, scoring
 from gpa.forecast.boosting import select_parameters
 from gpa.forecast.models import Ridge
 from tests.test_forecast import ZONE, price_frame, small_panel, without_intervals
-
-
-def test_fundamentals_use_latest_snapshot_before_the_market_gate():
-    target = dt.datetime(2025, 1, 10, 2, tzinfo=dt.UTC)  # 03:00 Europe/Berlin
-    before_gate = dt.datetime(2025, 1, 9, 10, tzinfo=dt.UTC)
-    after_gate = dt.datetime(2025, 1, 9, 12, tzinfo=dt.UTC)
-    snapshots = pl.DataFrame(
-        {
-            "zone": [ZONE.code, ZONE.code],
-            "ts_utc": [target, target],
-            "published_at": [before_gate, after_gate],
-            "load_forecast_mw": [100.0, 999.0],
-            "wind_forecast_mw": [20.0, 999.0],
-            "solar_forecast_mw": [10.0, 999.0],
-        }
-    )
-    panel = pl.DataFrame(
-        {
-            "local_date": [dt.date(2025, 1, 10)],
-            "local_hour": [3],
-            "ts_utc": [target],
-            "price": [50.0],
-        }
-    )
-    result = fundamentals.attach(panel, snapshots, ZONE)
-    assert result["da_load_forecast"].to_list() == [100.0]
-    assert result["da_residual_load_forecast"].to_list() == [70.0]
 
 
 def test_issue_ledger_retains_abstentions_and_round_trips(tmp_path):
