@@ -21,8 +21,6 @@ from gpa.sources.base import SourceError, fetch_bytes
 __all__ = ["PRODUCTS", "fetch_capacity_results", "parse_capacity_results"]
 
 PRODUCTS: Final = ("FCR", "aFRR")
-FIRST_DAILY_AUCTION: Final = dt.date(2020, 11, 3)
-"""From this day both products clear daily in six four-hour blocks."""
 
 _URL: Final = (
     "https://www.regelleistung.net/apps/cpp-publisher/api/v1/download/tenders/resultsoverview"

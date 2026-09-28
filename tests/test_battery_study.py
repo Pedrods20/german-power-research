@@ -1,10 +1,9 @@
-"""Economic interpretation, paired uncertainty and local research artifacts."""
+"""Economic interpretation and paired uncertainty on a common sample."""
 
 import datetime as dt
 
 import polars as pl
 import pytest
-from typer.testing import CliRunner
 
 from gpa.battery_study import (
     attribution,
@@ -12,9 +11,7 @@ from gpa.battery_study import (
     paired_comparisons,
     quarter_hour_value,
     risk_metrics,
-    save_study,
 )
-from gpa.cli import app
 from gpa.zones import get_zone
 from tests.test_battery import DAY, TZ, predictions
 
@@ -109,7 +106,7 @@ def test_unmatched_days_raise_instead_of_cherry_picking():
         paired_comparisons(frame)
 
 
-def test_evaluation_retains_costs_coverage_and_input_fingerprint():
+def test_evaluation_retains_costs_and_coverage():
     frame = predictions()
     result = evaluate(
         frame,
@@ -120,9 +117,6 @@ def test_evaluation_retains_costs_coverage_and_input_fingerprint():
     assert result.coverage.height == 5
     assert result.daily.height == 7
     assert result.comparisons.height == 12  # four non-naive strategies x three fixed naives
-    assert result.assumptions["cost_basis"] == "absolute_grid_mwh_charge_plus_discharge"
-    assert result.assumptions["cost_status"] == "user_assumptions_not_market_estimates"
-    assert len(result.assumptions["prediction_sha256"]) == 64
     rows = result.daily.filter(pl.col("strategy") == "ridge")
     assert rows["operating_cost_eur"].item() > 0
     assert rows["profit_eur"].item() == pytest.approx(
@@ -130,45 +124,6 @@ def test_evaluation_retains_costs_coverage_and_input_fingerprint():
         - rows["operating_cost_eur"].item()
         - rows["degradation_cost_eur"].item()
     )
-
-
-def test_a_saved_study_is_never_overwritten(tmp_path):
-    frame = predictions()
-    result = evaluate(frame, durations_mwh=(1.0,), resamples=200)
-    path = save_study(result, frame, tmp_path)
-    assert pl.read_parquet(path / "summary.parquet").equals(result.summary)
-    with pytest.raises(FileExistsError):
-        save_study(result, frame, tmp_path)
-
-
-def test_cannot_save_results_with_different_prediction_inputs(tmp_path):
-    frame = predictions()
-    result = evaluate(frame, durations_mwh=(1.0,), resamples=200)
-    with pytest.raises(ValueError, match="input"):
-        save_study(result, frame.with_columns(pl.col("forecast") + 1), tmp_path)
-
-
-def test_local_study_command_does_not_read_or_mutate_the_live_store(tmp_path, monkeypatch):
-    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path / "no-live-data"))
-    input_path = tmp_path / "predictions.parquet"
-    predictions().write_parquet(input_path)
-    output = tmp_path / "studies"
-    result = CliRunner().invoke(
-        app,
-        [
-            "battery-study",
-            "--predictions",
-            str(input_path),
-            "--output",
-            str(output),
-            "--resamples",
-            "200",
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    assert "Research study" in result.output
-    assert len(list(output.glob("*/manifest.json"))) == 1
-    assert not (tmp_path / "no-live-data").exists()
 
 
 def _shaped_days(count: int) -> pl.DataFrame:

@@ -1,18 +1,8 @@
-// Build-time summary of the prospective ledger, read from the attempt records
-// the Forecast workflow commits under data/forecast_issues/attempts/.
-//
-// Why a loader rather than an exported table: the ledger grows by a bot commit
-// on every scheduled run, and those commits deliberately trigger neither CI nor
-// a deploy. A table written by `gpa export` would go stale between human pushes
-// and fail `gpa export --check` on the first one after it. Computing the counter
-// when the site is built keeps it exact for the ledger the build saw, and the
-// "as of" it carries is the latest attempt in that ledger, not the build clock,
-// so the page states how current the count is instead of implying it is live.
-//
-// Every delivery day an arm was attempted for is counted once, at the best
-// outcome any of its attempts reached. `already_issued` is a backstop run
-// finding the day on record, so it confirms an issue and never counts as one.
-// Only the pilot's arms are counted; the retired `ridge_da` keeps its records.
+// Pilot counter, computed at build time from the committed attempt records: ledger
+// commits trigger no deploy, so an exported table would go stale between releases.
+// Each delivery day counts once per arm, at the best outcome any attempt reached;
+// `already_issued` confirms an issue and is not counted. The retired `ridge_da`
+// keeps its records but is not a pilot arm.
 
 import {existsSync, readFileSync, readdirSync} from "node:fs";
 import {fileURLToPath} from "node:url";

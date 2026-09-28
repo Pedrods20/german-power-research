@@ -2,8 +2,6 @@
 
 Each test fixes an input whose answer can be computed on paper, so a regression
 shows up as a wrong number rather than as a chart that merely looks different.
-The negative-price and low-coverage cases are here because both were real bugs
-in the previous version of this project.
 """
 
 from __future__ import annotations
@@ -96,7 +94,7 @@ def test_negative_prices_survive_into_the_block_average() -> None:
 
 
 def test_spread_is_block_difference_not_intraday_range() -> None:
-    """The original project plotted max minus min and called it a peak spread.
+    """The peak spread is a block difference, not the day's high minus low.
 
     German peakload is 08:00-20:00 CET, which in June (CEST, UTC+2) is 06:00 to
     18:00 UTC. Here every on-peak hour is 100 and every off-peak hour is 20, so

@@ -1,10 +1,5 @@
-// Observable Framework configuration.
-//
-// `root` is set to "site" because the framework defaults to "src", which is
-// where the Python package lives. Leaving the default would make the framework
-// try to build gpa/*.py as pages.
-
 export default {
+  // The framework defaults to "src", which holds the Python package.
   root: "site",
   title: "German Power Market Research",
 
@@ -20,8 +15,7 @@ export default {
   pager: true,
   typographicQuotes: true,
 
-  // An inline SVG favicon: the daily price shape this site is about, and one
-  // fewer 404 on every page load.
+  // Favicon: the daily price shape, inline.
   head: `<link rel="icon" href="data:image/svg+xml,${encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' +
       '<rect width="32" height="32" rx="6" fill="#0b1b2b"/>' +
@@ -30,12 +24,8 @@ export default {
       "</svg>",
   )}">
 <style>
-/* Page-wide layout guards, kept here rather than repeated per page: the
-   phone-overflow bug recurred on a third page precisely because each page
-   carried its own copy and a new page started without one.
-   A wide table scrolls itself instead of scrolling the document, and an
-   unbreakable inline token (a hash, a reproduce command) wraps instead of
-   pushing the page sideways. */
+/* Site-wide: wide tables scroll inside themselves and long inline code wraps,
+   so no page scrolls sideways on a phone. */
 main.observablehq > table { display: block; max-width: 100%; overflow-x: auto; }
 main.observablehq p code, main.observablehq li code { overflow-wrap: anywhere; }
 </style>`,
@@ -45,8 +35,7 @@ main.observablehq p code, main.observablehq li code { overflow-wrap: anywhere; }
     `Built from primary system-operator data. ` +
     `<a href="https://github.com/Pedrods20/german-power-research">Source and methodology on GitHub</a>.`,
 
-  // The site is served from a project page, so assets resolve under the
-  // repository name rather than the domain root.
+  // Project pages are served under /<repository>/.
   base: process.env.GPA_BASE_PATH ?? "/",
 
   search: true,

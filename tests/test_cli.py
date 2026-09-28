@@ -189,18 +189,6 @@ def test_export_check_passes_when_the_tables_match(
     assert result.exit_code == 0
 
 
-def test_battery_study_reads_the_frozen_release_by_default(release: None, tmp_path: Path) -> None:
-    """The site's battery figures come from the release; a local study must be
-    reproducible from the same predictions without a separate exported copy."""
-    output = tmp_path / "studies"
-
-    result = runner.invoke(app, ["battery-study", "--output", str(output), "--resamples", "100"])
-
-    assert result.exit_code == 0, result.stdout
-    assert "Research study saved" in result.stdout
-    assert any(output.iterdir())
-
-
 def test_export_check_exits_non_zero_when_the_tables_are_stale(
     populated: Path, release: None, tmp_path: Path
 ) -> None:

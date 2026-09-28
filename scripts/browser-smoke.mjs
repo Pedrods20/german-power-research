@@ -1,10 +1,11 @@
 import {chromium, expect} from '@playwright/test';
 import {mkdir} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import config from '../observablehq.config.js';
 
 const base = process.env.GPA_TEST_URL ?? 'http://127.0.0.1:3000/';
-const screenshotDir = process.env.GPA_SCREENSHOT_DIR ?? 'docs/screenshots';
+const screenshotDir = process.env.GPA_SCREENSHOT_DIR ?? join(tmpdir(), 'gpa-screenshots');
 // Follow navigation so a newly added page cannot silently miss the smoke test.
 const routes = ['', ...config.pages.map(({path}) => path.replace(/^\//, ''))];
 const textOnlyRoutes = new Set(['methodology']);

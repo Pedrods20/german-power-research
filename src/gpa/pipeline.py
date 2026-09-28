@@ -30,8 +30,8 @@ log = logging.getLogger(__name__)
 DEFAULT_LOOKBACK_DAYS = 7
 """Refetched behind the checkpoint: providers publish late and revise, and upserts converge."""
 
-PUBLISHED_AHEAD_DAYS: dict[str, int] = {"price": 2, "fundamentals": 2}
-"""Days past now worth requesting: tomorrow's prices and forecasts exist before tomorrow does."""
+PUBLISHED_AHEAD_DAYS: dict[str, int] = {"price": 2}
+"""Days past now worth requesting: tomorrow's prices exist before tomorrow does."""
 
 BACKFILL_CHUNK_DAYS = 60
 """Each chunk is written as it lands, so an interrupted backfill keeps what it has."""

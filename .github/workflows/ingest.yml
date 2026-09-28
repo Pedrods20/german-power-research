@@ -1,17 +1,10 @@
 name: Ingest
 
-# The engine that accumulates history. Runs monthly; each zone and dataset
-# resumes from the latest instant already committed, so a skipped month is
-# recovered by the next run instead of leaving a permanent gap. A few days
-# behind that checkpoint are refetched because providers publish on a lag and
-# revise afterwards. The store upserts on each dataset's natural key, so
-# overlapping runs converge on the restated figures instead of duplicating them.
+# Monthly store refresh. Each dataset resumes from its committed checkpoint and
+# refetches a revision overlap; upserts on the natural key absorb restatements.
 
 on:
   schedule:
-    # First day of each month at 05:40 UTC. The market study is historical, so
-    # monthly is enough; the prospective ledger refreshes its own inputs daily
-    # in forecast.yml.
     - cron: "40 5 1 * *"
   workflow_dispatch:
     inputs:
@@ -25,8 +18,6 @@ permissions:
   issues: write
 
 concurrency:
-  # Never let two ingests write the store at once; a queued run would commit on
-  # top of a half-written tree.
   group: ingest
   cancel-in-progress: false
 
@@ -49,18 +40,13 @@ jobs:
       - run: pip install -e .
 
       - name: Ingest
-        # The one registered zone is sourced from Energy-Charts, which needs no
-        # credential, so no zone list or secret is passed.
         run: gpa ingest --days ${{ github.event.inputs.days || '7' }}
 
       - name: Validate
         run: gpa validate
 
-      - name: Audit structural coverage
-        # Catches overlapping observations and internal missing time per zone,
-        # dataset and fuel, which schema validation alone would not catch.
-        # Runs before commit, unlike freshness: an integrity problem should
-        # block persistence, not just staleness.
+      - name: Audit gaps and overlaps
+        # Before the commit: an integrity problem blocks persistence.
         run: gpa audit
 
       - name: Rebuild site tables
@@ -69,10 +55,7 @@ jobs:
       - name: Report coverage
         run: gpa stats
 
-      # Committing comes before the freshness check on purpose. Whatever was
-      # fetched successfully should be persisted even when one feed has gone
-      # quiet; otherwise a single stale provider would discard a whole day of
-      # good observations from every other market.
+      # Before the freshness check, so one quiet feed does not discard the rest.
       - name: Commit
         id: commit
         run: |
@@ -85,24 +68,15 @@ jobs:
             exit 0
           fi
           git commit -m "data: ingest $(date -u +%Y-%m-%d)"
-          # Another run, or a push to main, may have landed while this one was
-          # fetching. Rebasing keeps the data history linear.
           git pull --rebase --autostash origin main
           git push
           echo "committed=true" >> "$GITHUB_OUTPUT"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Check freshness
-        # The public history is intentionally monthly, so the age check is
-        # informative here rather than a daily SLA. Use `gpa freshness` as a
-        # strict manual check when operating a more frequent forecast workflow.
         run: gpa freshness --no-strict
 
-      - name: Open an issue when the run fails
-        # Last, so that a failure in any earlier step reaches it, including the
-        # commit and push. The badge alone is easy to miss; an issue is
-        # visible, assignable and carries the log link. Repeated failures
-        # comment on the open issue rather than filing a new one every night.
+      - name: Open or update an issue when the run fails
         if: failure()
         uses: actions/github-script@v7
         with:
@@ -142,9 +116,7 @@ jobs:
 
   deploy:
     needs: ingest
-    # Runs whenever the commit step pushed new data, even if the later
-    # freshness check failed: a quiet provider should not hold back the
-    # observations every other market published successfully.
+    # New data ships even if the later freshness check failed.
     if: ${{ !cancelled() && needs.ingest.outputs.committed == 'true' }}
     permissions:
       contents: read

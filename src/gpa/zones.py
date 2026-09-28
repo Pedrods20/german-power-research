@@ -1,8 +1,7 @@
 """The one market this study analyses: Germany-Luxembourg (DE-LU).
 
 ``timezone`` defines the market's trading day and blocks; nothing is bucketed by
-UTC day. France, Spain and Brazil were retired on 23 September 2026 and remain in
-Git history.
+UTC day.
 """
 
 from __future__ import annotations

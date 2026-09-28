@@ -75,7 +75,7 @@ def test_clock_hour_dst_averages_are_not_physical_delivery_intervals():
     assert result.is_empty()
 
 
-def test_ordinary_clock_hour_input_retains_backwards_compatibility():
+def test_clock_hour_input_without_timestamps_is_placed_in_market_time():
     result = dispatch(intervals().drop("ts_utc", "duration_hours"), BatterySpec(), strategy="test")
     assert result.height == 24
     assert result["ts_utc"][0].hour == 23  # Berlin midnight, previous UTC date.

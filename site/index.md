@@ -109,7 +109,7 @@ Plot.plot({
 
 A 1 MW / 4 MWh battery dispatched once a day can, with perfect foresight, earn
 EUR ${eur(foresight(captureLast.year).eur_per_mw_day)}/MW a day in
-${captureLast.year}. A rule that simply repeats the last similar day's prices
+${captureLast.year}. A rule that repeats the last similar day's prices
 captured ${pct(100 * captureFirst.naive / captureFirst.perfect)} of that in
 ${captureFirst.year} and **${pct(100 * captureLast.naive / captureLast.perfect)}**
 in ${captureLast.year}. The forecast sits a few points above it every year. The
@@ -126,7 +126,7 @@ is worth about EUR ${eur(base4.incremental_vs_best_naive_eur_mw / (base4.days / 
 a year over the simple rule, ${share(base4.incremental_vs_best_naive_eur_mw / base4.profit_eur)}
 of the battery's gross margin.
 
-Where it earns matters more than how much. On the
+On the
 ${share(d3.sum(typicalDays, (d) => d.day_share))} of days whose shape was most
 typical, Ridge **loses** to the simple rule; the most atypical fifth of days
 carries **${share(atypical.incremental_share)}** of its gain. Negative-price days
@@ -206,15 +206,15 @@ profile, which is still growing.
 
 Quarter-hour products, traded since October 2025, raise the day-ahead arbitrage
 ceiling by ${share(quarterUplift(1))} for a 1-hour battery and
-${share(quarterUplift(4))} for a 4-hour one: worth having, but far less than the
-16% by which they widen the daily price range. Balancing capacity has paid more
+${share(quarterUplift(4))} for a 4-hour one, against the 16% by which they widen
+the daily price range. Balancing capacity has paid more
 than arbitrage. Since November 2020, aFRR up and down averaged EUR
 ${eur(stack("all", "afrr").eur_per_mw_day)}/MW a day and FCR
 ${eur(stack("all", "fcr").eur_per_mw_day)}, against
 ${eur(stack("all", "day_ahead").eur_per_mw_day)} for day-ahead arbitrage with the
-forecast. Those markets are shallow, though: Germany procures about 0.6 GW of FCR
-and 2 GW of aFRR each way, against ${num(fleetGw)} GW of installed batteries. And
-the gap is closing: for a 4-hour battery, arbitrage earned
+forecast. Those markets are shallow: Germany procures about 0.6 GW of FCR and
+2 GW of aFRR each way, against ${num(fleetGw)} GW of installed batteries. The gap
+is closing: for a 4-hour battery, arbitrage earned
 ${share(closing("2021"))} of the aFRR capacity value in 2021 and
 ${share(closing(stackLast))} in ${stackLast}.
 
@@ -224,7 +224,7 @@ ${share(closing(stackLast))} in ${stackLast}.
 
 - **Gas prices.** A cheaper marginal unit would lower the evening peak without
   lifting the midday trough.
-- **Grid-scale storage.** Two- to four-hour batteries compete for exactly this
+- **Grid-scale storage.** Two- to four-hour batteries compete for this
   spread. The fleet's average duration, ${fleetHours(last.year).toFixed(2)} hours in
   ${last.year}, is the first sign of them arriving; the small balancing markets
   would fill first.
@@ -254,13 +254,11 @@ ${share(closing(stackLast))} in ${stackLast}.
   ENTSO-E and SMARD data, and regelleistung.net, the German TSOs' balancing
   platform. [Definitions and assumptions](./methodology).
 
-## About me
+## Author
 
-**Pedro Cabral**
-
-I am a power market analyst with experience covering Brazil, Chile and Argentina. My work focuses on electricity market fundamentals, price formation and the commercial implications of the energy transition.
-
-This independent project extends my research to European power markets, examining German day-ahead prices and the value of forecasting for battery dispatch.
+Pedro Cabral, power market analyst covering Brazil, Chile and Argentina. This
+independent project applies the same work on fundamentals and price formation to
+the German market.
 
 [Research repository](https://github.com/Pedrods20/german-power-research) · [GitHub profile](https://github.com/Pedrods20)
 

@@ -64,13 +64,12 @@ money: an error cut in flat hours is worth little to a battery. The
 
 <div class="note">
 
-**How the forecast is kept honest.** It uses only data public before 12:00 on
-D-1: lagged prices, the calendar and residual load from two days earlier. Model
-settings are frozen before the test window, and every refit uses only earlier
-days. Published numbers come from a committed, hashed release that
+**Controls against look-ahead.** The forecast uses only data public before
+12:00 on D-1: lagged prices, the calendar and residual load from two days
+earlier. Model settings are frozen before the test window, and every refit uses
+only earlier days. Published numbers come from a committed, hashed release that
 `gpa export --check` verifies against the site. Live forecasts that miss the
-gate are refused, never backdated, and the arm that needs operator forecasts
-abstains on the record when they are not yet public.
+gate are refused, never backdated.
 
 </div>
 

@@ -7,13 +7,9 @@ cost rates are explicit assumptions.
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
-import json
-import platform
 from collections.abc import Iterator, Sequence
-from dataclasses import asdict, dataclass
-from pathlib import Path
-from typing import Any, Final
+from dataclasses import dataclass
+from typing import Final
 
 import numpy as np
 import numpy.typing as npt
@@ -34,10 +30,6 @@ _QUARTER_SOC_STEP_MWH: Final = 1 / 64
 _SURPRISE_LABELS: Final = ["1 (most typical)", "2", "3", "4", "5 (most atypical)"]
 _DISAGREEMENT_LABELS: Final = ["1 (agrees most)", "2", "3", "4", "5 (disagrees most)"]
 _KEYS: Final = ["strategy", "power_mw", "energy_mwh"]
-_TABLES: Final = ("predictions", "dispatch", "summary", "coverage", "daily", "risk", "comparisons")
-_SOURCES: Final = ("battery.py", "battery_study.py")
-# Read at import, not after a long study during which the workspace could change.
-_SOURCE_SNAPSHOT: Final = {name: Path(__file__).with_name(name).read_bytes() for name in _SOURCES}
 _MIN_BLOCKS: Final = 8
 _RISK_SCHEMA: Final = {
     "strategy": pl.String,
@@ -99,7 +91,6 @@ class BatteryStudy:
     daily: pl.DataFrame
     risk: pl.DataFrame
     comparisons: pl.DataFrame
-    assumptions: dict[str, Any]
 
 
 def _validate_daily(daily: pl.DataFrame) -> pl.DataFrame:
@@ -469,18 +460,6 @@ def quarter_hour_value(
     return pl.DataFrame(rows, schema=QUARTER_HOUR_SCHEMA)
 
 
-def _prediction_hash(predictions: pl.DataFrame) -> str:
-    """Fingerprint of the exact supplied values and types, not a rounded presentation."""
-    keys = (
-        ["model", "ts_utc"]
-        if "ts_utc" in predictions.columns
-        else ["model", "local_date", "local_hour"]
-    )
-    frame = predictions.select(sorted(predictions.columns)).sort(keys)
-    types = json.dumps({name: str(dtype) for name, dtype in frame.schema.items()}, sort_keys=True)
-    return hashlib.sha256((types + frame.write_json()).encode()).hexdigest()
-
-
 def evaluate(
     predictions: pl.DataFrame,
     *,
@@ -500,42 +479,6 @@ def evaluate(
     if result.dispatch.is_empty():
         raise ValueError("no shared complete settled days; inspect input coverage first")
     daily = daily_margins(result.dispatch)
-    start, end = daily["local_date"].min(), daily["local_date"].max()
-    assert isinstance(start, dt.date) and isinstance(end, dt.date)
-    assumptions: dict[str, Any] = {
-        "zone": "DE-LU",
-        "timezone": "Europe/Berlin",
-        "model_names": list(model_names),
-        "durations_mwh": list(durations_mwh),
-        "spec_kwargs": dict(spec_kwargs or {}),
-        "battery_specs": [
-            asdict(BatterySpec(energy_mwh=float(size), **(spec_kwargs or {})))
-            for size in durations_mwh
-        ],
-        "prediction_sha256": _prediction_hash(predictions),
-        "input_role": "supplied_retrospective_predictions",
-        "sample_start": start.isoformat(),
-        "sample_end": end.isoformat(),
-        "sample_days": daily["local_date"].n_unique(),
-        "schedule": "full_day_one_charge_then_discharge_episode",
-        "cost_basis": "absolute_grid_mwh_charge_plus_discharge",
-        "cost_status": "user_assumptions_not_market_estimates",
-        "initial_terminal_soc": "equal_each_day",
-        "bootstrap": "paired_nonoverlapping_calendar_blocks",
-        "block_days": block_days,
-        "resamples": resamples,
-        "seed": seed,
-        "confidence": 0.95,
-        "baseline_selection": "all_fixed_naive_pairs; best_naive_is_retrospective_in_sample",
-        "limitations": [
-            "Development backtest; not prospective or investment returns.",
-            "Hourly price averages are not quarter-hour forecasts; ambiguous clock-only DST days excluded.",
-            "Supplied prediction snapshot does not reproduce upstream model training or source vintages.",
-            "Cost assumptions exclude CAPEX, fixed OPEX, taxes and unmodelled execution costs.",
-            "Day-level downside and exploratory intervals are conditional on observed eligible days.",
-            "No multiplicity correction, seasonal profitability claim or automatic model selection.",
-        ],
-    }
     return BatteryStudy(
         result.dispatch,
         result.summary,
@@ -543,40 +486,4 @@ def evaluate(
         daily,
         risk_metrics(daily),
         paired_comparisons(daily, block_days=block_days, resamples=resamples, seed=seed),
-        assumptions,
     )
-
-
-def save_study(result: BatteryStudy, predictions: pl.DataFrame, root: Path) -> Path:
-    """Save a new content-addressed study with its inputs and calculation code; never overwrite."""
-    if result.assumptions["prediction_sha256"] != _prediction_hash(predictions):
-        raise ValueError("study input does not match the evaluated predictions")
-    code = b"".join(name.encode() + _SOURCE_SNAPSHOT[name] for name in _SOURCES)
-    metadata: dict[str, Any] = {
-        "assumptions": result.assumptions,
-        "environment": {
-            "python": platform.python_version(),
-            "polars": pl.__version__,
-            "numpy": np.__version__,
-        },
-        "source_sha256": hashlib.sha256(code).hexdigest(),
-    }
-    identifier = hashlib.sha256(json.dumps(metadata, sort_keys=True).encode()).hexdigest()[:20]
-    path = Path(root) / identifier
-    path.mkdir(parents=True, exist_ok=False)
-    checksums = {}
-    for name in _TABLES:
-        file = path / f"{name}.parquet"
-        (predictions if name == "predictions" else getattr(result, name)).write_parquet(
-            file, compression="zstd"
-        )
-        checksums[file.name] = hashlib.sha256(file.read_bytes()).hexdigest()
-    for name, source in _SOURCE_SNAPSHOT.items():
-        (path / name).write_bytes(source)
-        checksums[name] = hashlib.sha256(source).hexdigest()
-    # The manifest is written last, so an interrupted save is visibly incomplete.
-    metadata |= {"study_id": identifier, "checksums": checksums}
-    (path / "manifest.json").write_text(
-        json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8"
-    )
-    return path

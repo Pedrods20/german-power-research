@@ -1,12 +1,7 @@
 """Ingestion orchestration tests.
 
-``pipeline.py`` is the resilience story of the daily scheduled run. It decides
-what becomes failed, written or empty, and whether one bad provider stops the
-rest from updating. None of that was covered before, so
-these tests exercise it against fake sources rather than the network.
-
-The governing rule under test: one target failing must never stop the others,
-and a scheduled run is a failure only if a target genuinely failed.
+One dataset failing must never stop the others, and a run fails only when a
+target genuinely failed. Fake sources stand in for the network.
 """
 
 from __future__ import annotations
@@ -440,22 +435,6 @@ def test_only_datasets_published_before_delivery_extend_past_now(
 
     assert load.calls[-1][1] == NOW
     assert prices.calls[-1][1] == NOW + dt.timedelta(days=pipeline.PUBLISHED_AHEAD_DAYS["price"])
-
-
-def test_day_ahead_fundamentals_are_requested_past_now_like_prices() -> None:
-    """Fundamentals are operator *forecasts* for a delivery day, so they exist
-    before that day does. Capping the request at now was invisible while these
-    features were only replayed over history for the labelled ablation, and
-    fatal for a prospective issue: it would find no snapshot covering its own
-    delivery day and silently fall back every time."""
-    zone = get_zone("DE-LU")
-
-    _, forecast_end = pipeline.resolve_window(zone, "fundamentals", lookback_days=1, now=NOW)
-    _, measured_end = pipeline.resolve_window(zone, "generation", lookback_days=1, now=NOW)
-
-    assert forecast_end == NOW + dt.timedelta(days=pipeline.PUBLISHED_AHEAD_DAYS["fundamentals"])
-    assert forecast_end > NOW
-    assert measured_end == NOW  # a measurement still never reaches past now
 
 
 def test_prices_published_ahead_of_now_do_not_move_the_overlap_forward(

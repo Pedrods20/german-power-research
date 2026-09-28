@@ -1,4 +1,4 @@
-"""Independent numerical cases and source drift scenarios from the data audit."""
+"""Independent numerical cases and provider drift scenarios."""
 
 import datetime as dt
 
@@ -17,9 +17,6 @@ ZONE = get_zone("DE-LU")
 def test_the_one_market_is_served_by_one_credential_free_provider():
     assert {z.code for z in ZONES} == {"DE-LU"}
     assert {s for z in ZONES for s in z.sources.values()} == {"energy_charts"}
-    for retired in ("FR", "ES", "BR-SIN", "CAISO"):
-        with pytest.raises(KeyError):
-            get_zone(retired)
 
 
 def test_capture_preserves_both_autumn_delivery_hours():

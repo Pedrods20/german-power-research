@@ -230,9 +230,8 @@ def _capacity_price_yearly(
 ) -> pl.DataFrame:
     """Realised solar and wind capacity per year beside the price-shape metrics.
 
-    The block spread and the within-day range point in opposite directions here;
-    carrying both is what lets the site show the divergence. The current partial
-    year stays in this descriptive table and is excluded only from fitted statistics.
+    The current partial year stays in this descriptive table and is excluded only
+    from fitted statistics.
     """
     realised = capacity.filter((pl.col("time_step") == "yearly") & ~pl.col("is_planned"))
     if prices.is_empty() or generation.is_empty() or realised.is_empty():

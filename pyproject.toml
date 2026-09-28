@@ -61,5 +61,3 @@ python_version = "3.11"
 packages = ["gpa"]
 mypy_path = "src"
 strict = true
-warn_return_any = true
-disallow_untyped_defs = true

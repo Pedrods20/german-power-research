@@ -1,12 +1,8 @@
 """HTTP layer tests: retries, throttling and the shared helpers.
 
-``sources/base.py`` is not plumbing. It decides how long to wait after a 429,
-how many times to retry a flaky provider, and when to give up, and every
-adapter inherits that behaviour. A two-year Energy-Charts backfill fails
-outright without it, which is exactly what happened before the throttle
-handling was added.
-
-These run against an ``httpx.MockTransport`` rather than the network, and sleep
+``sources/base.py`` decides how long to wait after a 429, how often to retry
+and when to give up; a multi-year Energy-Charts backfill depends on it. These
+run against an ``httpx.MockTransport`` rather than the network, and sleep
 is patched out so the suite stays fast.
 """
 

@@ -1,15 +1,6 @@
 name: Deploy
 
-# Publishes one exact commit. It is never triggered by a push on its own:
-#
-# - CI calls it after lint, types, tests, the export check, the site build and
-#   the browser smoke test have all passed for the pushed commit;
-# - Ingest calls it with the data commit that run created, so new observations
-#   reach the site even when a later freshness check reports a stale feed;
-# - a manual dispatch deploys the ref chosen in the UI.
-#
-# Checking out the given SHA rather than moving `main` is what makes a green
-# deployment evidence that this revision, and not a later one, was validated.
+# Publishes one exact commit, called by CI or Ingest once that commit has passed.
 
 on:
   workflow_call:
@@ -51,8 +42,6 @@ jobs:
       - run: npm ci
 
       - name: Refuse stale site tables
-        # The committed tables are what CI or Ingest validated. Rebuilding them
-        # here would publish something nobody checked.
         run: gpa export --check
 
       - uses: actions/configure-pages@v5
@@ -60,8 +49,6 @@ jobs:
 
       - name: Build
         env:
-          # A project page is served under /<repo>/, so assets must resolve
-          # there rather than at the domain root.
           GPA_BASE_PATH: ${{ steps.pages.outputs.base_path }}/
         run: npm run build
 
