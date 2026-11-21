@@ -1,0 +1,8 @@
+{
+  "attempt_id": "gh-44863675860-1-naive_previous_week",
+  "delivery_date": "2026-11-22",
+  "model": "naive_previous_week",
+  "origin": "schedule",
+  "started_at": "2026-11-21T03:57:47.760353+00:00",
+  "zone": "DE-LU"
+}
